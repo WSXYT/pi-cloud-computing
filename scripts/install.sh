@@ -70,6 +70,7 @@ if [ ! -x "$NPM_BIN" ]; then
   printf 'npm was not found beside %s.\n' "$NODE_BIN" >&2
   exit 1
 fi
+export PATH="$(dirname "$NODE_BIN"):$PATH"
 printf 'Using Node %s and npm %s\n' "$($NODE_BIN --version)" "$($NPM_BIN --version)"
 
 if ! command -v pi >/dev/null 2>&1; then
