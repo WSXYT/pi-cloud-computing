@@ -2,7 +2,6 @@
 set -euo pipefail
 
 REPO="${PI_CLOUD_REPO:-WSXYT/pi-cloud-computing}"
-PACKAGE="github:${REPO}"
 MODE="client"
 IP=""
 
@@ -16,7 +15,6 @@ while [ "$#" -gt 0 ]; do
   --repo)
     shift
     REPO="${1:-}"
-    PACKAGE="github:${REPO}"
     ;;
   -h | --help)
     printf '%s\n' 'Usage:' '  install.sh                 Install Pi Cloud client' '  install.sh --worker --ip IP  Install and enable a Linux systemd Worker' '  install.sh --repo OWNER/REPO'
@@ -29,6 +27,12 @@ while [ "$#" -gt 0 ]; do
   esac
   shift
 done
+
+if [ "$(id -u)" -eq 0 ]; then
+  SUDO=""
+else
+  SUDO="sudo"
+fi
 
 install_node24() {
   if ! command -v apt-get >/dev/null 2>&1; then
@@ -50,26 +54,44 @@ install_node24() {
   $SUDO apt-get install -y nodejs
 }
 
-if ! command -v node >/dev/null 2>&1; then
+NODE_BIN="$(command -v node 2>/dev/null || true)"
+if [ -z "$NODE_BIN" ] || [ "$("$NODE_BIN" -p 'process.versions.node.split(".")[0]')" != "24" ]; then
   install_node24
+  hash -r
+  NODE_BIN="/usr/bin/node"
 fi
-NODE_MAJOR="$(node -p 'process.versions.node.split(".")[0]')"
-if [ "$NODE_MAJOR" != "24" ]; then
-  printf 'Node.js 24 is required; found %s. Installing Node.js 24...\n' "$(node --version)"
-  install_node24
-fi
-if ! command -v npm >/dev/null 2>&1; then
-  printf '%s\n' 'npm was not installed with Node.js 24.' >&2
+if [ ! -x "$NODE_BIN" ] || [ "$($NODE_BIN -p 'process.versions.node.split(".")[0]')" != "24" ]; then
+  printf '%s\n' 'Node.js 24 installation did not become the active system Node.' >&2
+  printf 'Found: %s\n' "${NODE_BIN:-none}" >&2
   exit 1
 fi
+NPM_BIN="$(dirname "$NODE_BIN")/npm"
+if [ ! -x "$NPM_BIN" ]; then
+  printf 'npm was not found beside %s.\n' "$NODE_BIN" >&2
+  exit 1
+fi
+printf 'Using Node %s and npm %s\n' "$($NODE_BIN --version)" "$($NPM_BIN --version)"
 
 if ! command -v pi >/dev/null 2>&1; then
-  npm install --global '@earendil-works/pi-coding-agent@0.84.2'
+  "$NPM_BIN" install --global '@earendil-works/pi-coding-agent@0.84.2' --ignore-scripts
 fi
-npm install --global "$PACKAGE"
+
+SOURCE_DIR="${PI_CLOUD_SOURCE_DIR:-${PI_CLOUD_DATA_DIR:-$HOME/.pi-cloud}/source}"
+if [ -d "$SOURCE_DIR/.git" ]; then
+  git -C "$SOURCE_DIR" fetch --depth 1 origin main
+  git -C "$SOURCE_DIR" reset --hard origin/main
+else
+  mkdir -p "$(dirname "$SOURCE_DIR")"
+  git clone --depth 1 "https://github.com/$REPO.git" "$SOURCE_DIR"
+fi
+(
+  cd "$SOURCE_DIR"
+  "$NPM_BIN" ci --ignore-scripts
+  "$NPM_BIN" run build
+)
 
 if [ "$MODE" = "client" ]; then
-  pi install "$PACKAGE"
+  pi install "$SOURCE_DIR"
   printf '%s\n' '' 'Pi Cloud client installed. Restart Pi or run /reload.' 'Next: /cloud-pair <https-url> <fingerprint> <pairing-code>'
   exit 0
 fi
@@ -87,11 +109,12 @@ if ! command -v systemctl >/dev/null 2>&1; then
   exit 1
 fi
 
-INSTALL_OUTPUT="$(pi-cloud worker install --ip "$IP" --systemd)"
+CLI="$SOURCE_DIR/dist/src/cli.js"
+INSTALL_OUTPUT="$("$NODE_BIN" "$CLI" worker install --ip "$IP" --systemd)"
 DATA_DIR="${PI_CLOUD_DATA_DIR:-$HOME/.pi-cloud}"
 UNIT="$DATA_DIR/pi-cloud-worker.service"
-sudo install -D -m 0644 "$UNIT" /etc/systemd/system/pi-cloud-worker.service
-sudo systemctl daemon-reload
-sudo systemctl enable --now pi-cloud-worker.service
+$SUDO install -D -m 0644 "$UNIT" /etc/systemd/system/pi-cloud-worker.service
+$SUDO systemctl daemon-reload
+$SUDO systemctl enable --now pi-cloud-worker.service
 printf '%s\n' "$INSTALL_OUTPUT"
 printf '%s\n' '' 'Worker installed and started.' 'Copy the printed fingerprint and pairing-code to the local Pi client.'
