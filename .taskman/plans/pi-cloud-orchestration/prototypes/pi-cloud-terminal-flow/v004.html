@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>pi-cloud CLI i18n</title>
+<style>
+:root{color-scheme:dark;--bg:#0b0d0b;--panel:#111411;--text:#e7ebe5;--muted:#929a91;--green:#7edc8b;--cyan:#78ced8;--yellow:#e4c36f;--line:#363b36;--white:#fafcf9}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",monospace;letter-spacing:0}.page{max-width:1040px;margin:auto;padding:20px 12px 48px}.terminal{border:1px solid var(--line);background:var(--panel);margin-bottom:18px}.bar{display:flex;justify-content:space-between;gap:12px;padding:9px 12px;border-bottom:1px solid var(--line);color:var(--muted)}.content{padding:14px 16px 18px}.line{min-height:24px;line-height:1.55;white-space:pre-wrap;overflow-wrap:anywhere}.prompt{color:var(--green)}.cmd,.heading{color:var(--white)}.heading{font-weight:700;margin:15px 0 7px}.muted{color:var(--muted)}.green{color:var(--green)}.cyan{color:var(--cyan)}.yellow{color:var(--yellow)}.fp{margin:5px 0 9px;padding:8px 10px;border-left:2px solid var(--cyan);background:#171b17;color:var(--cyan);overflow-wrap:anywhere}.rule{height:1px;background:var(--line);margin:18px 0}.row{display:grid;grid-template-columns:22px minmax(180px,1fr) minmax(150px,.75fr);gap:8px;padding:4px 6px}.row.selected{background:#1d221d}.key{display:inline-block;padding:1px 5px;border:1px solid #505650;border-radius:3px;color:var(--white)}.status{display:flex;flex-wrap:wrap;gap:15px;margin-top:12px;padding-top:8px;border-top:1px solid var(--line);font-size:13px;color:var(--muted)}details{border:1px solid var(--line);background:#0f120f}summary{cursor:pointer;padding:11px 13px;color:var(--cyan)}details .content{border-top:1px solid var(--line)}code{color:var(--white)}@media(max-width:640px){.bar{flex-direction:column}.row{grid-template-columns:22px 1fr}.row span:last-child{grid-column:2;color:var(--muted)}}
+</style>
+</head>
+<body>
+<main class="page">
+<section class="terminal">
+<div class="bar"><span>pi-cloud · 纯 CLI · 简体中文</span><span>语言：zh-CN</span></div>
+<div class="content">
+<div class="line"><span class="prompt">pi&gt;</span> <span class="cmd">/cloud config language zh-CN</span></div>
+<div class="line green">✓ 客户端语言已设置为简体中文</div>
+<div class="line"><span class="prompt">server$</span> <span class="cmd">pi-cloud config set language zh-CN</span></div>
+<div class="line green">✓ 服务端 CLI 语言已设置为简体中文</div>
+
+<div class="rule"></div>
+<div class="heading">1. 安装服务端 Worker</div>
+<div class="line"><span class="prompt">server$</span> <span class="cmd">pi-cloud worker install --listen 0.0.0.0:9443</span></div>
+<div class="line muted">正在为 IP 203.0.113.24 生成自签名 TLS 证书...</div>
+<div class="line green">✓ 证书已生成：/var/lib/pi-cloud/tls/server.crt</div>
+<div class="line green">✓ 私钥已安全保存，文件权限 0600</div>
+<div class="line green">✓ systemd 服务已安装并启动</div>
+<div class="line">配对地址：<span class="cyan">https://203.0.113.24:9443</span></div>
+<div class="line">一次性配对码：<span class="yellow">482 193</span>（10 分钟后过期）</div>
+<div class="line">TLS SHA-256 指纹：</div>
+<div class="fp">8A:5E:29:7B:F4:11:90:21:61:AB:08:70:A3:CD:6E:26:<br>F0:E5:3A:B8:B0:11:47:A5:6D:79:83:4B:C2:95:1F:71</div>
+<div class="line yellow">请保持服务器终端可见，客户端必须显示相同的证书指纹。</div>
+
+<div class="rule"></div>
+<div class="heading">2. 在本地 Pi 中配对</div>
+<div class="line"><span class="prompt">pi&gt;</span> <span class="cmd">/cloud pair 203.0.113.24:9443</span></div>
+<div class="line yellow">检测到未信任的自签名证书。</div>
+<div class="line">服务器：203.0.113.24:9443</div>
+<div class="line">证书指纹：<span class="cyan">8A:5E:29:7B:...:C2:95:1F:71</span></div>
+<div class="line">请与服务器上的 <code>pi-cloud worker status</code> 输出核对。</div>
+<div class="line">信任并固定此证书？ [y/N] y</div>
+<div class="line">配对码：482193</div>
+<div class="line green">✓ 配对成功 · 证书已固定 · 访问令牌已保存</div>
+
+<div class="rule"></div>
+<div class="heading">3. 提交云端任务</div>
+<div class="line"><span class="prompt">pi&gt;</span> <span class="cmd">/cloud run 修复登录超时并运行相关测试</span></div>
+<div class="line">提交到 203.0.113.24 前确认：</div>
+<div class="row selected"><span class="green">✓</span><span>当前 Pi 会话</span><span>42 条记录 · 186 KB</span></div>
+<div class="row"><span class="green">✓</span><span>Git 工作区</span><span>8 个修改 · 2 个未跟踪</span></div>
+<div class="row"><span class="green">✓</span><span>全局 Pi 运行环境</span><span>12 个包 · 7 个资源</span></div>
+<div class="row"><span class="green">✓</span><span>Provider 与模型</span><span>3 个 Provider</span></div>
+<div class="row"><span class="green">✓</span><span>已授权秘密</span><span>2 个未变化 · 1 个已变更</span></div>
+<div class="row"><span class="yellow">!</span><span>平台兼容差异</span><span>1 条警告 · 允许继续</span></div>
+<div class="line muted"><span class="key">↑↓</span> 选择　<span class="key">Space</span> 开关　<span class="key">A</span> 全选　<span class="key">Enter</span> 提交　<span class="key">Esc</span> 取消</div>
+<div class="line yellow">警告：插件 local-build 使用 Windows 专用路径，在 Linux Worker 上可能失败。</div>
+
+<div class="rule"></div>
+<div class="heading">4. 与云端 Pi 继续对话</div>
+<div class="line"><span class="green">● 云端运行中</span>　task_01JZ8M</div>
+<div class="line muted">同步完成 · Git 1.8 MB · Pi 环境未变化</div>
+<div class="line"><span class="cyan">remote›</span> 我先定位登录超时的共享调用路径。</div>
+<div class="line muted">工具：rg "login timeout|AbortSignal" src tests</div>
+<div class="line"><span class="cyan">remote›</span> 根因是共享请求函数没有向重试分支传递 signal。</div>
+<div class="line"><span class="prompt">pi&gt;</span> 也检查刷新令牌流程是否受影响</div>
+<div class="line muted">✓ 已作为 followUp 加入云端 Pi 队列</div>
+<div class="status"><span class="green">● 已连接</span><span>队列：1</span><span>交互模式</span><span>Esc：中止</span></div>
+
+<div class="rule"></div>
+<div class="heading">5. 回传结果</div>
+<div class="line green">✓ 云端任务已完成 · 测试通过</div>
+<div class="line">会话：<span class="green">新增 18 条原生记录</span></div>
+<div class="line">Git commit：<span class="cyan">9f41c2a 修复认证重试取消</span></div>
+<div class="line">文件：3 个修改 · +47 -12</div>
+<div class="line">验证：npm test -- auth <span class="green">通过</span></div>
+<div class="line muted"><span class="key">Enter</span> 应用 commit 并合并会话　<span class="key">D</span> 查看 diff　<span class="key">L</span> 稍后处理</div>
+<div class="line muted">不会覆盖本地变化；Git 或会话基线不一致时会停止合并。</div>
+</div>
+</section>
+
+<details>
+<summary>English CLI output / 英文输出对照</summary>
+<div class="content">
+<div class="line"><span class="prompt">pi&gt;</span> <span class="cmd">/cloud config language en</span></div>
+<div class="line green">✓ Client language set to English</div>
+<div class="line"><span class="prompt">server$</span> <span class="cmd">pi-cloud config set language en</span></div>
+<div class="line green">✓ Server CLI language set to English</div>
+<div class="heading">Server installation</div>
+<div class="line muted">Generating a self-signed TLS certificate for IP 203.0.113.24...</div>
+<div class="line green">✓ systemd service installed and started</div>
+<div class="heading">Client pairing</div>
+<div class="line yellow">Untrusted self-signed certificate detected.</div>
+<div class="line green">✓ Paired · certificate pinned · access token stored</div>
+<div class="heading">Task submission</div>
+<div class="line">Confirm submission to 203.0.113.24</div>
+<div class="line yellow">Warning: Plugin local-build uses a Windows-only path and may fail on the Linux Worker.</div>
+<div class="heading">Remote execution</div>
+<div class="line"><span class="green">● Cloud task running</span> · queue 1 · interactive</div>
+<div class="heading">Result</div>
+<div class="line green">✓ Remote task completed · tests passed</div>
+<div class="line muted">Local changes are never overwritten. A mismatched Git or session base stops the merge.</div>
+</div>
+</details>
+</main>
+</body>
+</html>

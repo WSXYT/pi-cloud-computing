@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pi Cloud Terminal Flow</title>
+<style>
+  :root { color-scheme: dark; --bg:#101210; --panel:#171a17; --line:#353a35; --text:#e7ebe5; --muted:#929a91; --green:#7edc8b; --cyan:#78ced8; --yellow:#e4c36f; --red:#ef8980; --white:#f8faf7; }
+  * { box-sizing:border-box; }
+  body { margin:0; min-height:100vh; background:#0d0f0d; color:var(--text); font-family:ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",monospace; letter-spacing:0; }
+  .shell { min-height:100vh; display:grid; grid-template-rows:auto 1fr; }
+  .topbar { display:flex; align-items:center; gap:18px; min-height:48px; padding:8px 18px; border-bottom:1px solid var(--line); background:#141614; }
+  .brand { font-weight:700; color:var(--white); white-space:nowrap; }
+  .brand b { color:var(--green); }
+  .steps { display:flex; flex-wrap:wrap; gap:6px; }
+  button { font:inherit; color:var(--muted); background:transparent; border:1px solid transparent; border-radius:4px; padding:6px 9px; cursor:pointer; }
+  button:hover { color:var(--text); border-color:var(--line); }
+  button.active { color:#071008; background:var(--green); border-color:var(--green); font-weight:700; }
+  .stage { min-width:0; display:grid; grid-template-columns:minmax(0,1fr) 260px; }
+  .terminal { min-width:0; padding:22px clamp(14px,3vw,38px); overflow:auto; }
+  .transcript { max-width:980px; margin:0 auto; }
+  .line { min-height:24px; line-height:1.55; white-space:pre-wrap; overflow-wrap:anywhere; }
+  .dim { color:var(--muted); } .green { color:var(--green); } .cyan { color:var(--cyan); } .yellow { color:var(--yellow); } .red { color:var(--red); } .strong { color:var(--white); font-weight:700; }
+  .section { margin:14px 0 8px; color:var(--white); font-weight:700; }
+  .row { display:grid; grid-template-columns:22px minmax(160px,1fr) minmax(130px,0.7fr); gap:8px; padding:5px 7px; border-left:2px solid transparent; }
+  .row.selected { background:#202520; border-left-color:var(--green); }
+  .check { color:var(--green); }
+  .key { display:inline-block; min-width:42px; color:var(--white); border:1px solid #4b514b; background:#202320; padding:1px 5px; border-radius:3px; text-align:center; }
+  .prompt { margin-top:18px; padding:9px 10px; border:1px solid #485048; background:#141714; color:var(--white); }
+  .prompt::before { content:"> "; color:var(--green); font-weight:700; }
+  .statusbar { display:flex; flex-wrap:wrap; gap:16px; margin-top:12px; padding-top:9px; border-top:1px solid var(--line); color:var(--muted); font-size:13px; }
+  .statusbar .live { color:var(--green); }
+  .side { border-left:1px solid var(--line); background:#121412; padding:18px 14px; }
+  .side h2 { margin:0 0 12px; font-size:13px; color:var(--white); }
+  .fact { padding:8px 0; border-bottom:1px solid #292d29; }
+  .fact span { display:block; color:var(--muted); font-size:12px; margin-bottom:3px; }
+  .fact strong { font-size:13px; font-weight:500; color:var(--text); overflow-wrap:anywhere; }
+  .hint { margin-top:16px; color:var(--muted); font-size:12px; line-height:1.55; }
+  .sponsor { margin-top:20px; padding-top:12px; border-top:1px solid var(--line); color:var(--muted); font-size:12px; }
+  .sponsor b { color:var(--yellow); font-weight:500; }
+  .screen { display:none; } .screen.active { display:block; }
+  .actions { display:flex; flex-wrap:wrap; gap:9px; margin:14px 0; }
+  .actions button { border-color:#4b514b; color:var(--text); }
+  .actions button.primary { background:var(--green); border-color:var(--green); color:#071008; font-weight:700; }
+  .meter { width:min(520px,100%); height:8px; border:1px solid #414641; margin:10px 0; }
+  .meter i { display:block; width:68%; height:100%; background:var(--cyan); }
+  @media (max-width:760px) { .stage { grid-template-columns:1fr; } .side { border-left:0; border-top:1px solid var(--line); } .row { grid-template-columns:22px 1fr; } .row span:last-child { grid-column:2; color:var(--muted); } }
+</style>
+</head>
+<body>
+<div class="shell">
+  <header class="topbar">
+    <div class="brand"><b>pi</b> cloud</div>
+    <nav class="steps" aria-label="流程预览">
+      <button data-screen="pair">1 配对</button>
+      <button data-screen="preflight" class="active">2 提交</button>
+      <button data-screen="running">3 执行</button>
+      <button data-screen="result">4 回传</button>
+    </nav>
+  </header>
+  <main class="stage">
+    <section class="terminal">
+      <div class="transcript">
+        <div id="pair" class="screen">
+          <div class="line dim">/cloud pair cloud.example.com</div>
+          <div class="section">连接新的 Pi Worker</div>
+          <div class="line">服务器        <span class="cyan">cloud.example.com</span></div>
+          <div class="line">连接方式      HTTPS + WSS</div>
+          <div class="line">证书          <span class="green">有效</span>  Let's Encrypt</div>
+          <div class="line">配对码        <span class="strong">482 193</span></div>
+          <div class="line">隔离模式      <span class="green">Docker（推荐）</span></div>
+          <div class="line yellow">提示：Docker 需要预先安装，但任务与宿主机隔离更安全。</div>
+          <div class="actions"><button class="primary">确认配对</button><button>改用宿主机模式</button></div>
+          <div class="line green">✓ 已配对，访问令牌已保存；可随时 /cloud revoke</div>
+        </div>
+
+        <div id="preflight" class="screen active">
+          <div class="line dim">/cloud run 修复登录超时并运行相关测试</div>
+          <div class="section">提交到 cloud.example.com 前确认</div>
+          <div class="row selected"><span class="check">✓</span><span>当前 Pi 会话</span><span>42 entries · 186 KB</span></div>
+          <div class="row"><span class="check">✓</span><span>Git 工作区</span><span>8 changed · 2 untracked</span></div>
+          <div class="row"><span class="check">✓</span><span>全局 Pi 运行环境</span><span>12 packages · 7 local resources</span></div>
+          <div class="row"><span class="check">✓</span><span>Provider / models 配置</span><span>3 providers</span></div>
+          <div class="row"><span class="check">✓</span><span>已授权秘密</span><span>2 unchanged · 1 updated</span></div>
+          <div class="row"><span class="yellow">!</span><span>平台兼容差异</span><span>1 warning · 继续执行</span></div>
+          <div class="line dim" style="margin-top:10px">↑↓ 选择 · Space 开关 · A 全选 · Enter 提交 · Esc 取消</div>
+          <div class="actions"><button class="primary">提交任务</button><button>查看完整清单</button></div>
+          <div class="line yellow">! extensions/local-build 使用 Windows 路径；服务器将保留配置并记录警告。</div>
+        </div>
+
+        <div id="running" class="screen">
+          <div class="line"><span class="green">● cloud</span> task_01JZ8M · interactive</div>
+          <div class="line dim">同步完成：session 186 KB · git 1.8 MB · environment unchanged</div>
+          <div class="line"><span class="cyan">remote›</span> 我先定位登录超时的调用路径和现有测试。</div>
+          <div class="line dim">tool  rg "login timeout|AbortSignal" src tests</div>
+          <div class="line dim">tool  read src/auth/client.ts</div>
+          <div class="line"><span class="cyan">remote›</span> 根因在共享请求函数没有向重试分支传递 signal。我会在共享入口修复并补一个回归测试。</div>
+          <div class="meter"><i></i></div>
+          <div class="line dim">任务运行中；你发送的普通消息会进入云端 Pi 队列。</div>
+          <div class="prompt">也检查刷新令牌流程是否受影响</div>
+          <div class="statusbar"><span class="live">● cloud connected</span><span>queue 1</span><span>git clean@base</span><span>$0.31</span><span>Esc abort</span></div>
+        </div>
+
+        <div id="result" class="screen">
+          <div class="line green">✓ 云端任务完成 · 2m 14s · tests passed</div>
+          <div class="section">回传结果</div>
+          <div class="line">会话          <span class="green">+18 原生 entries，可合并</span></div>
+          <div class="line">Git commit     <span class="cyan">9f41c2a fix auth retry cancellation</span></div>
+          <div class="line">文件          3 changed · +47 -12</div>
+          <div class="line">验证          npm test -- auth <span class="green">passed</span></div>
+          <div class="line">环境差异      1 warning（已记录）</div>
+          <div class="actions"><button class="primary">应用 commit 并合并会话</button><button>查看 diff</button><button>稍后处理</button></div>
+          <div class="line dim">本地工作区有新变化时不会覆盖；插件会停止并显示冲突。</div>
+          <div class="statusbar"><span class="green">ready to apply</span><span>artifact 4.2 MB</span><span>retained until delete</span></div>
+        </div>
+      </div>
+    </section>
+    <aside class="side">
+      <h2>当前连接</h2>
+      <div class="fact"><span>Worker</span><strong>cloud.example.com</strong></div>
+      <div class="fact"><span>Pi</span><strong>0.84.x · compatible</strong></div>
+      <div class="fact"><span>执行</span><strong>Docker · linux/amd64</strong></div>
+      <div class="fact"><span>项目</span><strong>pi-cloud-computing</strong></div>
+      <div class="fact"><span>保留策略</span><strong>直到用户删除</strong></div>
+      <p class="hint">核心命令：<br>/cloud pair<br>/cloud run<br>/cloud status<br>/cloud abort<br>/cloud apply<br>/cloud clean<br>/cloud secrets</p>
+      <div class="sponsor">服务器推荐<br><b>赞助商位置预留</b><br>仅跳转购买，不接触任务数据</div>
+    </aside>
+  </main>
+</div>
+<script>
+  const buttons=[...document.querySelectorAll('[data-screen]')];
+  const screens=[...document.querySelectorAll('.screen')];
+  for(const button of buttons){button.addEventListener('click',()=>{buttons.forEach(x=>x.classList.remove('active'));screens.forEach(x=>x.classList.remove('active'));button.classList.add('active');document.getElementById(button.dataset.screen).classList.add('active');});}
+</script>
+</body>
+</html>

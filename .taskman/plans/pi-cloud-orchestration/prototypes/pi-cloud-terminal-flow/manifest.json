@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "plan": "pi-cloud-orchestration",
+  "slug": "pi-cloud-terminal-flow",
+  "title": "Pi Cloud Terminal Flow",
+  "created_at": "2026-08-22T05:42:09.116Z",
+  "updated_at": "2026-08-22T06:33:40.114Z",
+  "latest_version": 4,
+  "versions": [
+    {
+      "version": 1,
+      "file": "v001.html",
+      "intent": "展示 Pi 内从配对、提交前同步清单、云端交互执行到审查回传补丁的完整终端流程。",
+      "created_at": "2026-08-22T05:42:09.116Z"
+    },
+    {
+      "version": 2,
+      "file": "v002.html",
+      "intent": "修正为纯 CLI 产品：使用 IP、自签名证书指纹固定和一次性配对码，不包含网页控制台。",
+      "created_at": "2026-08-22T05:51:49.082Z"
+    },
+    {
+      "version": 3,
+      "file": "v003.html",
+      "intent": "纯 CLI 双语原型：完整支持简体中文/英文切换，并展示客户端与服务端语言配置命令。",
+      "created_at": "2026-08-22T06:31:19.163Z"
+    },
+    {
+      "version": 4,
+      "file": "v004.html",
+      "intent": "无 JavaScript 的稳定 CLI i18n 原型：默认完整显示中文流程，并提供英文输出对照，页面不再依赖动态渲染。",
+      "created_at": "2026-08-22T06:33:40.114Z"
+    }
+  ]
+}
