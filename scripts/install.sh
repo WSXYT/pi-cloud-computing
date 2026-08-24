@@ -8,25 +8,58 @@ IP=""
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --worker) MODE="worker" ;;
-    --ip) shift; IP="${1:-}" ;;
-    --repo) shift; REPO="${1:-}"; PACKAGE="github:${REPO}" ;;
-    -h|--help)
-      printf '%s\n' 'Usage:' '  install.sh                 Install Pi Cloud client' '  install.sh --worker --ip IP  Install and enable a Linux systemd Worker' '  install.sh --repo OWNER/REPO'
-      exit 0
-      ;;
-    *) printf 'Unknown option: %s\n' "$1" >&2; exit 2 ;;
+  --worker) MODE="worker" ;;
+  --ip)
+    shift
+    IP="${1:-}"
+    ;;
+  --repo)
+    shift
+    REPO="${1:-}"
+    PACKAGE="github:${REPO}"
+    ;;
+  -h | --help)
+    printf '%s\n' 'Usage:' '  install.sh                 Install Pi Cloud client' '  install.sh --worker --ip IP  Install and enable a Linux systemd Worker' '  install.sh --repo OWNER/REPO'
+    exit 0
+    ;;
+  *)
+    printf 'Unknown option: %s\n' "$1" >&2
+    exit 2
+    ;;
   esac
   shift
 done
 
-if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
-  printf '%s\n' 'Node.js 24 and npm are required. Install Node.js 24, then run this script again.' >&2
-  exit 1
+install_node24() {
+  if ! command -v apt-get >/dev/null 2>&1; then
+    printf '%s\n' 'Node.js 24 is required. Automatic installation currently supports Debian/Ubuntu apt systems.' >&2
+    exit 1
+  fi
+  if [ "$(id -u)" -ne 0 ]; then
+    SUDO=sudo
+  else
+    SUDO=
+  fi
+  $SUDO apt-get update
+  $SUDO apt-get install -y ca-certificates curl gnupg
+  if [ -n "$SUDO" ]; then
+    curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash -
+  else
+    curl -fsSL https://deb.nodesource.com/setup_24.x | bash -
+  fi
+  $SUDO apt-get install -y nodejs
+}
+
+if ! command -v node >/dev/null 2>&1; then
+  install_node24
 fi
 NODE_MAJOR="$(node -p 'process.versions.node.split(".")[0]')"
 if [ "$NODE_MAJOR" != "24" ]; then
-  printf 'Node.js 24 is required; found %s.\n' "$(node --version)" >&2
+  printf 'Node.js 24 is required; found %s. Installing Node.js 24...\n' "$(node --version)"
+  install_node24
+fi
+if ! command -v npm >/dev/null 2>&1; then
+  printf '%s\n' 'npm was not installed with Node.js 24.' >&2
   exit 1
 fi
 
