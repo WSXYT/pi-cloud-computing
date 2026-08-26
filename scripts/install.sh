@@ -10,26 +10,41 @@ ASSUME_YES=0
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --client) ROLE="client" ;;
-    --worker) ROLE="worker" ;;
-    --both) ROLE="both" ;;
-    --ip) shift; IP="${1:-}" ;;
-    --lang|--language) shift; LANGUAGE="${1:-}" ;;
-    --runner) shift; RUNNER="${1:-}" ;;
-    --repo) shift; REPO="${1:-}" ;;
-    -y|--yes) ASSUME_YES=1 ;;
-    -h|--help)
-      printf '%s\n' \
-        'Pi Cloud installer' \
-        '  --client                 Install the local Pi extension' \
-        '  --worker --ip ADDRESS    Install the Linux Worker' \
-        '  --both --ip ADDRESS      Install both roles' \
-        '  --lang zh-CN|en          Set interface language' \
-        '  --runner host|docker     Set Worker isolation mode' \
-        'Without role/language arguments, the installer asks interactively.'
-      exit 0
-      ;;
-    *) printf 'Unknown option: %s\n' "$1" >&2; exit 2 ;;
+  --client) ROLE="client" ;;
+  --worker) ROLE="worker" ;;
+  --both) ROLE="both" ;;
+  --ip)
+    shift
+    IP="${1:-}"
+    ;;
+  --lang | --language)
+    shift
+    LANGUAGE="${1:-}"
+    ;;
+  --runner)
+    shift
+    RUNNER="${1:-}"
+    ;;
+  --repo)
+    shift
+    REPO="${1:-}"
+    ;;
+  -y | --yes) ASSUME_YES=1 ;;
+  -h | --help)
+    printf '%s\n' \
+      'Pi Cloud installer' \
+      '  --client                 Install the local Pi extension' \
+      '  --worker --ip ADDRESS    Install the Linux Worker' \
+      '  --both --ip ADDRESS      Install both roles' \
+      '  --lang zh-CN|en          Set interface language' \
+      '  --runner host|docker     Set Worker isolation mode' \
+      'Without role/language arguments, the installer asks interactively.'
+    exit 0
+    ;;
+  *)
+    printf 'Unknown option: %s\n' "$1" >&2
+    exit 2
+    ;;
   esac
   shift
 done
@@ -45,7 +60,7 @@ ask() {
 
 if [ -z "$LANGUAGE" ]; then
   default_language="en"
-  case "${LC_ALL:-${LANG:-}}" in zh*|ZH*) default_language="zh-CN" ;; esac
+  case "${LC_ALL:-${LANG:-}}" in zh* | ZH*) default_language="zh-CN" ;; esac
   if [ "$default_language" = "zh-CN" ]; then default_choice=1; else default_choice=2; fi
   language_choice="$(ask $'选择语言 / Choose language:\n  1) 简体中文\n  2) English\n> ' "$default_choice")"
   if [ "$language_choice" = "1" ] || [ "$language_choice" = "zh-CN" ]; then LANGUAGE="zh-CN"; else LANGUAGE="en"; fi
@@ -91,12 +106,18 @@ if [ ! -x "$NODE_BIN" ] || [ "$($NODE_BIN -p 'process.versions.node.split(".")[0
   exit 1
 fi
 NPM_BIN="$(dirname "$NODE_BIN")/npm"
-if [ ! -x "$NPM_BIN" ]; then printf 'npm was not found beside %s.\n' "$NODE_BIN" >&2; exit 1; fi
+if [ ! -x "$NPM_BIN" ]; then
+  printf 'npm was not found beside %s.\n' "$NODE_BIN" >&2
+  exit 1
+fi
 export PATH="$(dirname "$NODE_BIN"):$PATH"
 printf 'Node %s · npm %s\n' "$($NODE_BIN --version)" "$($NPM_BIN --version)"
 
 if ! command -v git >/dev/null 2>&1; then
-  if command -v apt-get >/dev/null 2>&1; then $SUDO apt-get install -y git; else printf '%s\n' 'Git is required.' >&2; exit 1; fi
+  if command -v apt-get >/dev/null 2>&1; then $SUDO apt-get install -y git; else
+    printf '%s\n' 'Git is required.' >&2
+    exit 1
+  fi
 fi
 
 PI_BIN="$(command -v pi 2>/dev/null || true)"
@@ -171,7 +192,10 @@ if [ -z "$IP" ]; then
   fi
   IP="$ip_choice"
 fi
-if [ -z "$IP" ]; then printf '%s\n' 'A Worker IP is required.' >&2; exit 2; fi
+if [ -z "$IP" ]; then
+  printf '%s\n' 'A Worker IP is required.' >&2
+  exit 2
+fi
 
 if [ -z "$RUNNER" ]; then
   if command -v docker >/dev/null 2>&1; then
@@ -181,7 +205,10 @@ if [ -z "$RUNNER" ]; then
     RUNNER="host"
   fi
 fi
-if [ "$RUNNER" != "host" ] && [ "$RUNNER" != "docker" ]; then printf '%s\n' 'Runner must be host or docker.' >&2; exit 2; fi
+if [ "$RUNNER" != "host" ] && [ "$RUNNER" != "docker" ]; then
+  printf '%s\n' 'Runner must be host or docker.' >&2
+  exit 2
+fi
 
 CLI="$SOURCE_DIR/dist/src/cli.js"
 "$NODE_BIN" "$CLI" config set language "$LANGUAGE"
@@ -194,11 +221,12 @@ DATA_DIR="${PI_CLOUD_DATA_DIR:-$HOME/.pi-cloud}"
 UNIT="$DATA_DIR/pi-cloud-worker.service"
 $SUDO install -D -m 0644 "$UNIT" /etc/systemd/system/pi-cloud-worker.service
 $SUDO systemctl daemon-reload
-$SUDO systemctl enable --now pi-cloud-worker.service
+$SUDO systemctl enable pi-cloud-worker.service
+$SUDO systemctl restart pi-cloud-worker.service
 
 if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q '^Status: active'; then
   open_firewall="$(ask "Open TCP port 9443 with UFW? [Y/n]: " y)"
-  case "$open_firewall" in n|N|no|NO) ;; *) $SUDO ufw allow 9443/tcp ;; esac
+  case "$open_firewall" in n | N | no | NO) ;; *) $SUDO ufw allow 9443/tcp ;; esac
 fi
 
 printf '%s\n' "$INSTALL_OUTPUT"
