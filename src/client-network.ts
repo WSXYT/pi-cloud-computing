@@ -1,4 +1,4 @@
-import { request, type RequestOptions } from "node:https";
+import { Agent, request, type RequestOptions } from "node:https";
 import type { IncomingMessage } from "node:http";
 import type { TLSSocket } from "node:tls";
 
@@ -16,8 +16,8 @@ export interface PairResponse {
   certificateFingerprint: string;
 }
 
-function normalizeFingerprint(value: string): string {
-  return value.replaceAll(":", "").toLowerCase();
+export function normalizeFingerprint(value: string): string {
+  return value.replaceAll(":", "").trim().toLowerCase();
 }
 
 function assertPinned(response: IncomingMessage, fingerprint: string): void {
@@ -31,6 +31,8 @@ function assertPinned(response: IncomingMessage, fingerprint: string): void {
 }
 
 export class CloudConnection {
+  private readonly agent = new Agent({ keepAlive: false, maxCachedSessions: 0, rejectUnauthorized: false });
+
   constructor(
     readonly baseUrl: string,
     readonly fingerprint: string,
@@ -58,6 +60,8 @@ export class CloudConnection {
     }
     if (!value.token || !value.workerId || !value.certificateFingerprint)
       throw new Error("invalid pairing response");
+    if (normalizeFingerprint(value.certificateFingerprint) !== normalizeFingerprint(this.fingerprint))
+      throw new Error("CERTIFICATE_MISMATCH");
     this.token = value.token;
     return value;
   }
@@ -71,6 +75,23 @@ export class CloudConnection {
       method: "POST",
       body: Buffer.from(data),
       contentType,
+      authenticated: true,
+    });
+  }
+
+  async uploadSecret(id: string, value: string, version = 1): Promise<void> {
+    await this.request(`/secrets/${encodeURIComponent(id)}`, {
+      method: "POST",
+      body: value,
+      contentType: "application/json",
+      authenticated: true,
+      headers: { "x-secret-version": String(version) },
+    });
+  }
+
+  async revokeSecret(id: string): Promise<void> {
+    await this.request(`/secrets/${encodeURIComponent(id)}`, {
+      method: "DELETE",
       authenticated: true,
     });
   }
@@ -89,6 +110,7 @@ export class CloudConnection {
     const socket = new WebSocket(
       `${this.baseUrl.replace(/^https:/, "wss:")}/events`,
       {
+        agent: this.agent,
         rejectUnauthorized: false,
         headers: { authorization: `Bearer ${this.token}` },
       },
@@ -126,10 +148,11 @@ export class CloudConnection {
       body?: string | Buffer;
       contentType?: string;
       authenticated?: boolean;
+      headers?: Record<string, string>;
     },
   ): Promise<Buffer> {
     const url = new URL(path, this.baseUrl);
-    const headers: Record<string, string | number> = {};
+    const headers: Record<string, string | number> = { ...options.headers };
     if (options.body)
       headers["content-length"] = Buffer.byteLength(options.body);
     if (options.contentType) headers["content-type"] = options.contentType;
@@ -140,6 +163,7 @@ export class CloudConnection {
       port: url.port,
       path: `${url.pathname}${url.search}`,
       method: options.method,
+      agent: this.agent,
       rejectUnauthorized: false,
       headers,
     };

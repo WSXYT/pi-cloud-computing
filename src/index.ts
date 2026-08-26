@@ -8,6 +8,8 @@ export * from "./errors.js";
 export * from "./i18n.js";
 export * from "./protocol.js";
 export * from "./session.js";
+export * from "./worker/execution.js";
+export * from "./worker/network.js";
 export * from "./worker/pairing.js";
 export * from "./worker/rpc.js";
 export * from "./worker/runner.js";

@@ -50,6 +50,14 @@ async function call(
   });
 }
 
+async function waitFor(predicate: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error("timed out waiting for Worker event");
+}
+
 const task: TaskSpec = {
   taskId: "task-ws-1",
   projectId: "project-1",
@@ -146,7 +154,7 @@ test("serves health, pairing, manifest, and authenticated artifacts", async () =
       encodeFrame({ type: "hello", protocolVersion: 1, clientId: "client-1" }),
     );
     socket.send(encodeFrame({ type: "task_create", task }));
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await waitFor(() => messages.some((message) => message.includes('"task_accepted"')));
     socket.send(
       encodeFrame({
         type: "task_input",
@@ -157,7 +165,7 @@ test("serves health, pairing, manifest, and authenticated artifacts", async () =
         },
       }),
     );
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await waitFor(() => messages.some((message) => message.includes('"also check refresh"')));
     assert.equal(
       messages.some((message) => message.includes('"hello_ack"')),
       true,

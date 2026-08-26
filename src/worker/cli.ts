@@ -5,11 +5,21 @@ import {
   saveWorkerConfig,
   setWorkerConfigValue,
 } from "./config.js";
-import { createPairing } from "./pairing.js";
+import { createPairing, revokeToken } from "./pairing.js";
 import { loadWorkerState, saveWorkerState } from "./state.js";
 import { ensureSelfSignedCertificate } from "./tls.js";
 import { startWorkerServer } from "./server.js";
 import { cleanupExpiredTasks, writeSystemdUnit } from "./service.js";
+import { discoverWorkerAddresses } from "./network.js";
+
+function pairingOutput(config: Awaited<ReturnType<typeof loadWorkerConfig>>, fingerprint: string, pairing: { code: string; expiresAt: string }, stdout: (message: string) => void): void {
+  const address = `https://${config.publicIp}:${config.port}`;
+  stdout(`address=${address}`);
+  stdout(`fingerprint=${fingerprint}`);
+  stdout(`pairing-code=${pairing.code}`);
+  stdout(`pairing-expires-at=${pairing.expiresAt}`);
+  stdout(`pair-command=/cloud-pair ${address} ${fingerprint} ${pairing.code}`);
+}
 
 function flagValue(args: string[], flag: string): string | undefined {
   const index = args.indexOf(flag);
@@ -24,7 +34,7 @@ export async function runWorkerCli(
   const [scope, command, key, value] = args;
   if (scope !== "worker" && scope !== "config") {
     stdout(
-      "Usage: pi-cloud worker <install|status|start|stop> | config set <key> <value>",
+      "Usage: pi-cloud worker <install|pair|ips|status|tokens|start|stop> | config set <key> <value>",
     );
     return 2;
   }
@@ -32,6 +42,31 @@ export async function runWorkerCli(
     const next = setWorkerConfigValue(config, key, value);
     await saveWorkerConfig(next);
     stdout(`${key}=${value}`);
+    return 0;
+  }
+  if (scope === "worker" && command === "ips") {
+    stdout(JSON.stringify(await discoverWorkerAddresses(), null, 2));
+    return 0;
+  }
+  if (scope === "worker" && command === "tokens") {
+    const state = await loadWorkerState(config.dataDir);
+    stdout(JSON.stringify(state.tokens.map(({ id, createdAt, revokedAt }) => ({ id, createdAt, revokedAt: revokedAt ?? null })), null, 2));
+    return 0;
+  }
+  if (scope === "worker" && command === "token" && key === "revoke" && value) {
+    const state = await loadWorkerState(config.dataDir);
+    if (!revokeToken(state, value)) throw new Error(`active token not found: ${value}`);
+    await saveWorkerState(config.dataDir, state);
+    stdout(`revoked-token=${value}`);
+    return 0;
+  }
+  if (scope === "worker" && command === "pair") {
+    const tls = await ensureSelfSignedCertificate(config.dataDir, config.publicIp);
+    const state = await loadWorkerState(config.dataDir);
+    state.certificateFingerprint = tls.fingerprint;
+    const pairing = createPairing(state);
+    await saveWorkerState(config.dataDir, state);
+    pairingOutput(config, tls.fingerprint, pairing, stdout);
     return 0;
   }
   if (scope === "worker" && command === "status") {
@@ -84,7 +119,10 @@ export async function runWorkerCli(
     return 0;
   }
   if (scope === "worker" && command === "install") {
-    const ip = flagValue(args, "--ip") ?? config.publicIp;
+    const detected = await discoverWorkerAddresses();
+    const configuredIp = config.publicIp === "127.0.0.1" ? undefined : config.publicIp;
+    const ip = flagValue(args, "--ip") ?? configuredIp ?? detected.publicIp ?? detected.privateIps[0];
+    if (!ip) throw new Error("No Worker IP detected; pass --ip <address>");
     config = setWorkerConfigValue(config, "ip", ip);
     await saveWorkerConfig(config);
     const tls = await ensureSelfSignedCertificate(
@@ -95,10 +133,8 @@ export async function runWorkerCli(
     state.certificateFingerprint = tls.fingerprint;
     const pairing = createPairing(state);
     await saveWorkerState(config.dataDir, state);
-    stdout(`address=https://${config.publicIp}:${config.port}`);
+    pairingOutput(config, tls.fingerprint, pairing, stdout);
     stdout(`certificate=${tls.paths.certificate}`);
-    stdout(`fingerprint=${tls.fingerprint}`);
-    stdout(`pairing-code=${pairing.code}`);
     if (args.includes("--systemd"))
       stdout(`systemd-unit=${await writeSystemdUnit(config.dataDir)}`);
     return 0;
@@ -115,8 +151,7 @@ export async function runWorkerCli(
     state.certificateFingerprint = tls.fingerprint;
     const pairing = createPairing(state);
     await saveWorkerState(config.dataDir, state);
-    stdout(`fingerprint=${tls.fingerprint}`);
-    stdout(`pairing-code=${pairing.code}`);
+    pairingOutput(config, tls.fingerprint, pairing, stdout);
     return 0;
   }
   if (scope === "worker" && (command === "start" || command === "stop")) {
@@ -131,7 +166,7 @@ export async function runWorkerCli(
     return exitCode;
   }
   stdout(
-    "Usage: pi-cloud worker <install|status|start|stop> | config set <key> <value>",
+    "Usage: pi-cloud worker <install|pair|ips|status|tokens|start|stop> | config set <key> <value>",
   );
   return 2;
 }

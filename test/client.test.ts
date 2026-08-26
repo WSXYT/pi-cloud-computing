@@ -21,6 +21,9 @@ test("registers the cloud command surface", async () => {
     "cloud-reconnect",
     "cloud-apply",
     "cloud-merge",
+    "cloud-status",
+    "cloud-help",
+    "cloud-language",
     "cloud-sponsor",
     "cloud",
   ]);

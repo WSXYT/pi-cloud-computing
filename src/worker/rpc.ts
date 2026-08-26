@@ -41,38 +41,62 @@ export class PiRpcExecutor {
     });
   }
 
-  start(record: TaskRecord, sessionPath: string): void {
+  start(
+    record: TaskRecord,
+    sessionPath?: string,
+    cwd = this.options.cwd,
+    onComplete?: (succeeded: boolean) => Promise<Record<string, unknown>>,
+    envOverrides: NodeJS.ProcessEnv = {},
+  ): void {
     if (record.status !== "running") throw new Error("task is not active");
     if (this.processes.has(record.task.taskId))
       throw new Error("task process already started");
     const args = [
       ...(this.options.baseArgs ?? ["--mode", "rpc"]),
-      "--session",
-      sessionPath,
+      ...(sessionPath ? ["--session", sessionPath] : ["--no-session"]),
     ];
     const child = (this.options.runner ?? { spawn }).spawn(
       this.options.command ?? "pi",
       args,
       {
-        cwd: this.options.cwd,
-        env: { ...process.env, ...this.options.env },
+        cwd,
+        env: { ...process.env, ...this.options.env, ...envOverrides },
         stdio: "pipe",
         windowsHide: true,
       },
     );
     this.processes.set(record.task.taskId, child);
-    this.readEvents(record.task.taskId, child);
-    child.once("error", (error) =>
-      this.tasks.settle(record.task.taskId, "failed", { error: error.message }),
-    );
-    child.once("close", (code, signal) => {
+    let agentSettled = false;
+    this.readEvents(record.task.taskId, child, () => {
+      agentSettled = true;
+      child.stdin.end();
+      setTimeout(() => child.kill(), 5000).unref();
+    });
+    let spawnFailed = false;
+    child.once("error", (error) => {
+      spawnFailed = true;
+      void (onComplete ? onComplete(false) : Promise.resolve())
+        .catch(() => undefined)
+        .finally(() =>
+          this.tasks.settle(record.task.taskId, "failed", {
+            error: error.message,
+          }),
+        );
+    });
+    child.once("close", async (code, signal) => {
       this.processes.delete(record.task.taskId);
-      if (record.status === "aborted") return;
-      this.tasks.settle(
-        record.task.taskId,
-        code === 0 ? "completed" : "failed",
-        { exitCode: code, signal },
-      );
+      if (record.status === "aborted" || spawnFailed) return;
+      try {
+        const succeeded = code === 0 || agentSettled;
+        const payload = onComplete ? await onComplete(succeeded) : {};
+        this.tasks.settle(
+          record.task.taskId,
+          succeeded ? "completed" : "failed",
+          { exitCode: code, signal, ...payload },
+        );
+      } catch (error) {
+        this.tasks.settle(record.task.taskId, "failed", { error: error instanceof Error ? error.message : String(error) });
+      }
     });
     this.write(child, { type: "prompt", message: record.task.prompt });
   }
@@ -111,6 +135,7 @@ export class PiRpcExecutor {
   private readEvents(
     taskId: string,
     child: ChildProcessWithoutNullStreams,
+    onSettled: () => void,
   ): void {
     const decoder = new StringDecoder("utf8");
     let pending = "";
@@ -120,13 +145,13 @@ export class PiRpcExecutor {
       while (newline >= 0) {
         const line = pending.slice(0, newline).replace(/\r$/, "");
         pending = pending.slice(newline + 1);
-        if (line) this.forwardEvent(taskId, line);
+        if (line && this.forwardEvent(taskId, line)) onSettled();
         newline = pending.indexOf("\n");
       }
     });
     child.stdout.once("end", () => {
       pending += decoder.end();
-      if (pending.trim()) this.forwardEvent(taskId, pending.trim());
+      if (pending.trim() && this.forwardEvent(taskId, pending.trim())) onSettled();
     });
     child.stderr.on("data", (chunk: Buffer) =>
       this.tasks.log(taskId, {
@@ -136,11 +161,14 @@ export class PiRpcExecutor {
     );
   }
 
-  private forwardEvent(taskId: string, line: string): void {
+  private forwardEvent(taskId: string, line: string): boolean {
     try {
-      this.tasks.log(taskId, { rpc: JSON.parse(line) as unknown });
+      const rpc = JSON.parse(line) as { type?: unknown };
+      this.tasks.log(taskId, { rpc });
+      return rpc.type === "agent_settled";
     } catch {
       this.tasks.log(taskId, { stream: "stdout", text: line });
+      return false;
     }
   }
 }

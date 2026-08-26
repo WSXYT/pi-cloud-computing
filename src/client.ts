@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import { homedir, platform } from "node:os";
 import { join } from "node:path";
 
@@ -8,9 +9,13 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import type WebSocket from "ws";
 
-import { buildEnvironmentManifest } from "./environment.js";
+import { buildEnvironmentManifest, sha256 } from "./environment.js";
 import { detectLocale, translate } from "./i18n.js";
-import { createGitSnapshot, parseGitSnapshot } from "./git.js";
+import {
+  createWorkspaceArchive,
+  parseGitSnapshot,
+  serializeWorkspaceArchive,
+} from "./git.js";
 import {
   exportSessionBranch,
   mergeSessionTail,
@@ -20,7 +25,9 @@ import {
 } from "./session.js";
 import type { ClientFrame, TaskEvent, TaskSpec } from "./protocol.js";
 import { applyGitSnapshot } from "./result.js";
-import { CloudConnection } from "./client-network.js";
+import { CloudConnection, normalizeFingerprint } from "./client-network.js";
+import { selectSyncItems, type SyncPreflightItem } from "./client-preflight.js";
+import { selectCloudMenu, type CloudMenuItem } from "./client-menu.js";
 import {
   loadClientState,
   saveClientState,
@@ -31,6 +38,7 @@ import {
 interface ActiveTask {
   taskId: string;
   cursor: number;
+  accepted: boolean;
   socket: WebSocket;
   connection: CloudConnection;
 }
@@ -43,15 +51,29 @@ interface LastResult {
 
 const PI_VERSION = "0.84.2";
 
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
+}
+
 function agentDir(): string {
   return process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
 }
 
-function displayEvent(ctx: ExtensionContext, event: TaskEvent): void {
-  const status =
-    typeof event.payload.status === "string"
-      ? event.payload.status
-      : event.kind;
+function displayEvent(
+  ctx: ExtensionContext,
+  event: TaskEvent,
+  tr: (key: Parameters<typeof translate>[1], params?: Record<string, string | number>) => string,
+): void {
+  const rawStatus = typeof event.payload.status === "string" ? event.payload.status : event.kind;
+  const status = rawStatus === "running"
+    ? tr("task.running")
+    : rawStatus === "completed"
+      ? tr("task.completed")
+      : rawStatus === "aborted"
+        ? tr("task.aborted")
+        : rawStatus;
   const message =
     typeof event.payload.message === "string"
       ? event.payload.message
@@ -67,7 +89,8 @@ function displayEvent(ctx: ExtensionContext, event: TaskEvent): void {
 function parsePairArgs(
   args: string,
 ): { baseUrl: string; fingerprint: string; code: string } | undefined {
-  const [baseUrl, fingerprint, code] = args.trim().split(/\s+/);
+  const normalized = args.trim().replace(/^\/cloud-pair\s+/, "");
+  const [baseUrl, fingerprint, code] = normalized.split(/\s+/);
   return baseUrl && fingerprint && code
     ? { baseUrl, fingerprint, code }
     : undefined;
@@ -77,7 +100,7 @@ export default async function piCloudExtension(
   pi: ExtensionAPI,
 ): Promise<void> {
   let state: CloudClientState = await loadClientState();
-  const locale = detectLocale(state.locale);
+  let locale = detectLocale(state.locale);
   const tr = (
     key: Parameters<typeof translate>[1],
     params: Record<string, string | number> = {},
@@ -109,6 +132,7 @@ export default async function piCloudExtension(
     record: CloudConnectionState,
   ): Promise<void> => {
     state = {
+      ...state,
       connections: [
         ...state.connections.filter(
           (item) => item.workerId !== record.workerId,
@@ -126,14 +150,14 @@ export default async function piCloudExtension(
       let input = parsePairArgs(args);
       if (!input && ctx.hasUI) {
         const baseUrl = await ctx.ui.input(
-          "Worker HTTPS URL",
+          tr("cloud.pairUrlPrompt"),
           "https://127.0.0.1:9443",
         );
         const fingerprint = await ctx.ui.input(
-          "Certificate SHA-256 fingerprint",
+          tr("cloud.pairFingerprintPrompt"),
           "AA:BB:...",
         );
-        const code = await ctx.ui.input("One-time pairing code", "");
+        const code = await ctx.ui.input(tr("cloud.pairCodePrompt"), "");
         if (baseUrl && fingerprint && code)
           input = { baseUrl, fingerprint, code };
       }
@@ -145,15 +169,20 @@ export default async function piCloudExtension(
         input.baseUrl.replace(/\/$/, ""),
         input.fingerprint,
       );
-      const paired = await connection.pair(input.code);
-      await saveConnection({
-        baseUrl: connection.baseUrl,
-        workerId: paired.workerId,
-        fingerprint: paired.certificateFingerprint,
-        token: paired.token,
-        pairedAt: new Date().toISOString(),
-      });
-      ctx.ui.notify(tr("cloud.paired", { workerId: paired.workerId }), "info");
+      try {
+        const paired = await connection.pair(input.code);
+        await saveConnection({
+          baseUrl: connection.baseUrl,
+          workerId: paired.workerId,
+          fingerprint: normalizeFingerprint(input.fingerprint),
+          token: paired.token,
+          pairedAt: new Date().toISOString(),
+        });
+        ctx.ui.notify(tr("cloud.paired", { workerId: paired.workerId }), "info");
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        ctx.ui.notify(message === "CERTIFICATE_MISMATCH" ? `${tr("pair.certificateUntrusted")} · ${tr("cloud.pairFingerprintPrompt")}` : message, "error");
+      }
     },
   });
 
@@ -166,6 +195,7 @@ export default async function piCloudExtension(
         return;
       }
       state = {
+        ...state,
         connections: state.connections.filter(
           (item) => item.workerId !== selected.record.workerId,
         ),
@@ -210,12 +240,12 @@ export default async function piCloudExtension(
         (ctx.hasUI
           ? await ctx.ui.input(
               tr("cloud.remotePrompt"),
-              "Continue the current task",
+              tr("cloud.defaultPrompt"),
             )
-          : "Continue the current task");
+          : tr("cloud.defaultPrompt"));
       if (!prompt) return;
       const archive = exportSessionBranch(ctx.sessionManager);
-      const git = await createGitSnapshot(ctx.cwd);
+      const workspace = await createWorkspaceArchive(ctx.cwd);
       const manifest = await buildEnvironmentManifest({
         agentDir: agentDir(),
         cwd: ctx.cwd,
@@ -223,77 +253,127 @@ export default async function piCloudExtension(
         nodeVersion: process.version,
         platform: platform(),
       });
+      let authData: Buffer | undefined;
+      try {
+        authData = await readFile(join(agentDir(), "auth.json"));
+      } catch {
+        authData = undefined;
+      }
       const taskId = randomUUID();
-      const items = [
-        `environment manifest (${manifest.resources.length} resources, ${manifest.providers.length} providers)`,
-        `Git snapshot (${git.files.length} changed files)`,
-        `session branch (${archive.entries.length} entries)`,
-      ];
-      const approved = ctx.hasUI
-        ? await ctx.ui.select(tr("cloud.syncConfirm"), [...items, "Cancel"])
-        : "Cancel";
-      if (approved === "Cancel" || !approved) {
+      const environmentData = Buffer.from(`${JSON.stringify(manifest)}\n`);
+      const gitData = Buffer.from(serializeWorkspaceArchive(workspace));
+      const sessionData = Buffer.from(serializeSessionArchive(archive));
+      const preflightItems: SyncPreflightItem[] = [
+          {
+            id: "environment",
+            label: tr("cloud.environmentLabel"),
+            description: tr("cloud.environmentDescription", {
+              resources: manifest.resources.length,
+              providers: manifest.providers.length,
+              size: formatBytes(environmentData.byteLength),
+            }),
+            selected: true,
+          },
+          {
+            id: "git",
+            label: tr("cloud.gitLabel"),
+            description: tr("cloud.gitDescription", {
+              files: workspace.snapshot.files.length,
+              size: formatBytes(gitData.byteLength),
+            }),
+            selected: true,
+            required: true,
+          },
+          {
+            id: "session",
+            label: tr("cloud.sessionLabel"),
+            description: tr("cloud.sessionDescription", {
+              entries: archive.entries.length,
+              size: formatBytes(sessionData.byteLength),
+            }),
+            selected: true,
+          },
+        ];
+      if (authData) {
+        preflightItems.push({
+          id: "credentials",
+          label: tr("cloud.credentialsLabel"),
+          description: tr("cloud.credentialsDescription"),
+          selected: false,
+        });
+      }
+      const chosen = await selectSyncItems(
+        ctx,
+        preflightItems,
+        {
+          title: tr("cloud.preflightTitle"),
+          required: tr("cloud.required"),
+          upload: tr("cloud.upload"),
+          cancel: tr("cloud.cancel"),
+          help: tr("cloud.preflightHelp"),
+          empty: tr("cloud.preflightEmpty"),
+        },
+      );
+      if (!chosen) {
         ctx.ui.notify(tr("cloud.cancelled"), "info");
         return;
       }
+      const payloads = [
+        { selectionId: "environment", id: `${taskId}-environment`, kind: "environment" as const, data: environmentData, contentType: "application/json" },
+        { selectionId: "git", id: `${taskId}-git`, kind: "workspace" as const, data: gitData, contentType: "application/json" },
+        { selectionId: "session", id: `${taskId}-session`, kind: "session" as const, data: sessionData, contentType: "application/jsonl" },
+      ].filter((payload) => chosen.has(payload.selectionId));
+      const emptyEnvironment = {
+        piVersion: manifest.piVersion,
+        nodeVersion: manifest.nodeVersion,
+        platform: manifest.platform,
+        packages: [],
+        resources: [],
+        providers: [],
+        secretVersions: [],
+        warnings: manifest.warnings,
+      };
+      const leafId = archive.entries.at(-1)?.id ?? null;
       const task: TaskSpec = {
         taskId,
         projectId: ctx.cwd,
         prompt,
         runner: "docker",
-        environment: manifest,
-        git: git.baseline,
-        session: {
-          sessionId: archive.header.id,
-          baseLeafId: archive.entries.at(-1)?.id ?? null,
-          lastEntryId: archive.entries.at(-1)?.id ?? null,
-          entriesSha256: archive.entriesSha256,
-        },
-        artifacts: [
-          {
-            id: `${taskId}-environment`,
-            kind: "environment",
-            size: Buffer.byteLength(JSON.stringify(manifest)),
-            sha256: "pending",
-            contentType: "application/json",
-          },
-          {
-            id: `${taskId}-git`,
-            kind: "workspace",
-            size: Buffer.byteLength(JSON.stringify(git)),
-            sha256: "pending",
-            contentType: "application/json",
-          },
-          {
-            id: `${taskId}-session`,
-            kind: "session",
-            size: Buffer.byteLength(serializeSessionArchive(archive)),
-            sha256: "pending",
-            contentType: "application/jsonl",
-          },
-        ],
-        secretIds: [],
+        environment: chosen.has("environment") ? manifest : emptyEnvironment,
+        git: workspace.snapshot.baseline,
+        session: chosen.has("session")
+          ? { sessionId: archive.header.id, baseLeafId: leafId, lastEntryId: leafId, entriesSha256: archive.entriesSha256 }
+          : { sessionId: randomUUID(), baseLeafId: null, lastEntryId: null, entriesSha256: sha256("") },
+        artifacts: payloads.map((payload) => ({
+          id: payload.id,
+          kind: payload.kind,
+          size: payload.data.byteLength,
+          sha256: sha256(payload.data),
+          contentType: payload.contentType,
+        })),
+        secretIds: chosen.has("credentials") ? ["pi-auth"] : [],
       };
-      await selected.connection.upload(
-        `${taskId}-environment`,
-        Buffer.from(JSON.stringify(manifest)),
-        "application/json",
-      );
-      await selected.connection.upload(
-        `${taskId}-git`,
-        Buffer.from(JSON.stringify(git)),
-        "application/json",
-      );
-      await selected.connection.upload(
-        `${taskId}-session`,
-        Buffer.from(serializeSessionArchive(archive)),
-        "application/jsonl",
-      );
+      if (chosen.has("credentials") && authData) {
+        ctx.ui.setStatus("pi-cloud", tr("cloud.credentialsLabel"));
+        await selected.connection.uploadSecret("pi-auth", authData.toString("utf8"));
+      }
+      for (const payload of payloads) {
+        ctx.ui.setStatus("pi-cloud", `${tr("cloud.upload")}: ${payload.selectionId}`);
+        await selected.connection.upload(payload.id, payload.data, payload.contentType);
+      }
+      ctx.ui.setStatus("pi-cloud", undefined);
       const socket = await selected.connection.openEvents((frame) => {
+        if (frame.type === "task_accepted" && frame.taskId === taskId) {
+          if (active) active.accepted = frame.status === "running";
+          return;
+        }
         if (frame.type !== "task_event" || frame.event.taskId !== taskId)
           return;
-        active && (active.cursor = frame.event.cursor);
-        displayEvent(ctx, frame.event);
+        if (active) {
+          active.cursor = frame.event.cursor;
+          if (frame.event.payload.status === "running") active.accepted = true;
+        }
+        displayEvent(ctx, frame.event, tr);
         pi.appendEntry("pi-cloud-live", {
           taskId,
           cursor: frame.event.cursor,
@@ -327,7 +407,13 @@ export default async function piCloudExtension(
           ctx.ui.setWidget("pi-cloud", undefined);
         }
       });
-      active = { taskId, cursor: 0, socket, connection: selected.connection };
+      active = {
+        taskId,
+        cursor: 0,
+        accepted: false,
+        socket,
+        connection: selected.connection,
+      };
       selected.connection.send(socket, {
         type: "hello",
         protocolVersion: 1,
@@ -351,7 +437,7 @@ export default async function piCloudExtension(
         if (frame.type !== "task_event" || frame.event.taskId !== task.taskId)
           return;
         task.cursor = frame.event.cursor;
-        displayEvent(ctx, frame.event);
+        displayEvent(ctx, frame.event, tr);
       });
       task.connection.send(task.socket, {
         type: "task_resume",
@@ -363,7 +449,7 @@ export default async function piCloudExtension(
   });
 
   pi.registerCommand("cloud-apply", {
-    description: "Review and apply a remote Git result artifact",
+    description: tr("cloud.applyDescription"),
     handler: async (args, ctx) => {
       const connection = lastResult?.connection ?? connectionFor()?.connection;
       const artifactId = args.trim() || lastResult?.artifactId;
@@ -376,10 +462,10 @@ export default async function piCloudExtension(
       const choice = ctx.hasUI
         ? await ctx.ui.select(tr("result.ready"), [
             ...snapshot.files.map((file) => `${file.status}: ${file.path}`),
-            "Cancel",
+            tr("cloud.cancel"),
           ])
-        : "Cancel";
-      if (choice === "Cancel" || !choice) return;
+        : tr("cloud.cancel");
+      if (choice === tr("cloud.cancel") || !choice) return;
       const changed = await applyGitSnapshot(ctx.cwd, snapshot);
       ctx.ui.notify(`${tr("result.ready")}: ${changed.length}`, "info");
     },
@@ -414,6 +500,43 @@ export default async function piCloudExtension(
     },
   });
 
+  pi.registerCommand("cloud-status", {
+    description: tr("cloud.statusDescription"),
+    handler: async (_args, ctx) => {
+      const selected = connectionFor();
+      const lines = selected
+        ? [
+            tr("cloud.connected", { address: selected.record.baseUrl, workerId: selected.record.workerId }),
+            `TLS SHA-256: ${selected.record.fingerprint}`,
+            active ? tr("cloud.activeStatus", { taskId: active.taskId, cursor: active.cursor }) : tr("cloud.idleStatus"),
+          ]
+        : [tr("cloud.disconnected")];
+      ctx.ui.setWidget("pi-cloud", lines);
+      ctx.ui.notify(lines[0] ?? tr("cloud.disconnected"), selected ? "info" : "warning");
+    },
+  });
+
+  pi.registerCommand("cloud-help", {
+    description: tr("cloud.helpDescription"),
+    handler: async (_args, ctx) => {
+      ctx.ui.setWidget("pi-cloud-help", tr("cloud.helpText").split("\n"));
+      ctx.ui.notify(tr("cloud.helpChoice"), "info");
+    },
+  });
+
+  pi.registerCommand("cloud-language", {
+    description: tr("cloud.languageDescription"),
+    handler: async (_args, ctx) => {
+      const selected = ctx.hasUI ? await ctx.ui.select(tr("cloud.languageChoice"), ["简体中文", "English"]) : undefined;
+      if (!selected) return;
+      locale = selected === "简体中文" ? "zh-CN" : "en";
+      state = { ...state, locale };
+      await saveClientState(state);
+      ctx.ui.notify(tr("language.set", { locale }), "info");
+      await ctx.reload();
+    },
+  });
+
   pi.registerCommand("cloud-sponsor", {
     description: tr("recommendation.sponsorPlaceholder"),
     handler: async (_args, ctx) =>
@@ -424,36 +547,65 @@ export default async function piCloudExtension(
     description: tr("cloud.menu"),
     handler: async (args, ctx) => {
       const command = args.trim();
-      if (command === "pair")
-        return pi.sendUserMessage("/cloud-pair", { deliverAs: "followUp" });
-      if (command === "submit")
-        return pi.sendUserMessage("/cloud-submit", { deliverAs: "followUp" });
-      if (command === "abort")
-        return pi.sendUserMessage("/cloud-abort", { deliverAs: "followUp" });
-      if (!ctx.hasUI) {
-        ctx.ui.notify(tr("cloud.menu"), "info");
+      const commandMap: Record<string, string> = {
+        pair: "/cloud-pair",
+        submit: "/cloud-submit",
+        abort: "/cloud-abort",
+        reconnect: "/cloud-reconnect",
+        status: "/cloud-status",
+        help: "/cloud-help",
+        language: "/cloud-language",
+        unpair: "/cloud-unpair",
+        apply: "/cloud-apply",
+        merge: "/cloud-merge",
+      };
+      const sendCommand = (value: string) => pi.sendUserMessage(value, { deliverAs: "followUp", expandPromptTemplates: true });
+      if (commandMap[command]) {
+        sendCommand(commandMap[command]);
         return;
       }
-      const choice = await ctx.ui.select(tr("cloud.menu"), [
-        tr("cloud.submitChoice"),
-        tr("cloud.pairChoice"),
-        tr("cloud.abortChoice"),
-        tr("cloud.unpairChoice"),
-      ]);
-      if (choice === tr("cloud.submitChoice"))
-        pi.sendUserMessage("/cloud-submit", { deliverAs: "followUp" });
-      else if (choice === tr("cloud.pairChoice"))
-        pi.sendUserMessage("/cloud-pair", { deliverAs: "followUp" });
-      else if (choice === tr("cloud.abortChoice"))
-        pi.sendUserMessage("/cloud-abort", { deliverAs: "followUp" });
-      else if (choice === tr("cloud.unpairChoice"))
-        pi.sendUserMessage("/cloud-unpair", { deliverAs: "followUp" });
+      if (!ctx.hasUI) {
+        ctx.ui.notify(tr("cloud.helpText"), "info");
+        return;
+      }
+      ctx.ui.setWidget("pi-cloud-help", undefined);
+      const selected = connectionFor();
+      const status = selected
+        ? [
+            tr("cloud.connected", { address: selected.record.baseUrl, workerId: selected.record.workerId }),
+            active ? tr("cloud.activeStatus", { taskId: active.taskId, cursor: active.cursor }) : tr("cloud.idleStatus"),
+          ]
+        : [tr("cloud.disconnected")];
+      const items: CloudMenuItem[] = [];
+      if (selected) {
+        items.push({ value: "submit", label: tr("cloud.submitChoice"), description: tr("cloud.submitDescription") });
+        items.push({ value: "status", label: tr("cloud.statusChoice"), description: tr("cloud.statusDescription") });
+        if (active) {
+          items.push({ value: "reconnect", label: tr("cloud.reconnectDescription"), description: tr("cloud.activeStatus", { taskId: active.taskId, cursor: active.cursor }) });
+          items.push({ value: "abort", label: tr("cloud.abortChoice"), description: tr("cloud.abortDescription") });
+        }
+        if (lastResult) {
+          items.push({ value: "apply", label: tr("result.ready"), description: tr("cloud.applyDescription") });
+          if (lastResult.sessionArtifactId) items.push({ value: "merge", label: tr("cloud.mergeDescription"), description: tr("cloud.mergeDescription") });
+        }
+        items.push({ value: "unpair", label: tr("cloud.unpairChoice"), description: tr("cloud.unpairDescription") });
+      } else {
+        items.push({ value: "pair", label: tr("cloud.pairChoice"), description: tr("cloud.pairDescription") });
+      }
+      items.push({ value: "help", label: tr("cloud.helpChoice"), description: tr("cloud.helpDescription") });
+      items.push({ value: "language", label: tr("cloud.languageChoice"), description: tr("cloud.languageDescription") });
+      const choice = await selectCloudMenu(ctx, tr("cloud.menu"), status, items, tr("cloud.menuHelp"));
+      if (choice && commandMap[choice]) sendCommand(commandMap[choice]);
     },
   });
 
-  pi.on("input", (event) => {
+  pi.on("input", (event, ctx) => {
     if (!active || event.source === "extension" || event.text.startsWith("/"))
       return { action: "continue" as const };
+    if (!active.accepted) {
+      ctx.ui.notify(tr("task.submitted", { address: connectionFor()?.record.baseUrl ?? "Worker" }), "info");
+      return { action: "handled" as const };
+    }
     active.connection.send(active.socket, {
       type: "task_input",
       input: {

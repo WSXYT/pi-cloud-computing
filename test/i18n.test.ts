@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  catalogs,
   detectLocale,
   MESSAGE_KEYS,
   resolveLocale,
@@ -9,7 +10,8 @@ import {
 } from "../src/i18n.js";
 
 test("keeps Chinese and English catalogs in parity", () => {
-  assert.equal(MESSAGE_KEYS.length, 38);
+  assert.deepEqual(Object.keys(catalogs.en).sort(), [...MESSAGE_KEYS].sort());
+  assert.deepEqual(Object.keys(catalogs["zh-CN"]).sort(), [...MESSAGE_KEYS].sort());
   for (const key of MESSAGE_KEYS) {
     assert.notEqual(translate("zh-CN", key), "");
     assert.notEqual(translate("en", key), "");

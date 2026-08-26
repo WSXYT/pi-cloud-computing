@@ -3,14 +3,19 @@ import {
   createServer as createHttpsServer,
   type Server as HttpsServer,
 } from "node:https";
-import { mkdir, readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { readFile } from "node:fs/promises";
 
 import { buildEnvironmentManifest } from "../environment.js";
 import { encodeFrame, type WorkerIdentity } from "../protocol.js";
 import { authenticateToken, completePairing } from "./pairing.js";
 import { ArtifactStore, MAX_ARTIFACT_BYTES } from "./artifacts.js";
+import { SecretStore } from "./secrets.js";
 import { loadWorkerConfig } from "./config.js";
+import {
+  cleanupPreparedTask,
+  collectTaskResults,
+  prepareTask,
+} from "./execution.js";
 import { loadWorkerState, saveWorkerState } from "./state.js";
 import { ensureSelfSignedCertificate } from "./tls.js";
 import { PiRpcExecutor } from "./rpc.js";
@@ -27,6 +32,8 @@ export interface WorkerServerOptions {
   gitVersion: string;
   port?: number;
   enableExecution?: boolean;
+  rpcCommand?: string;
+  rpcArgs?: string[];
 }
 
 export interface WorkerServer {
@@ -83,6 +90,7 @@ export async function startWorkerServer(
   state.certificateFingerprint = tls.fingerprint;
   await saveWorkerState(options.dataDir, state);
   const artifacts = await ArtifactStore.open(options.dataDir);
+  const secrets = await SecretStore.open(options.dataDir);
   const manifest = await buildEnvironmentManifest({
     agentDir: options.dataDir,
     cwd: options.dataDir,
@@ -108,6 +116,7 @@ export async function startWorkerServer(
         };
         if (typeof input.code !== "string")
           return json(response, 400, { error: "PAIRING_CODE_INVALID" });
+        Object.assign(state, await loadWorkerState(options.dataDir));
         const token = completePairing(state, input.code);
         await saveWorkerState(options.dataDir, state);
         return json(response, 200, {
@@ -123,6 +132,17 @@ export async function startWorkerServer(
           manifest,
           certificateFingerprint: state.certificateFingerprint,
         });
+      if (request.method === "POST" && url.pathname.startsWith("/secrets/")) {
+        const id = decodeURIComponent(url.pathname.slice("/secrets/".length));
+        if (!/^[A-Za-z0-9._-]+$/.test(id)) return json(response, 400, { error: "SECRET_INVALID" });
+        const version = Number(request.headers["x-secret-version"] ?? 1);
+        const metadata = await secrets.put(id, version, (await body(request)).toString("utf8"));
+        return json(response, 201, metadata);
+      }
+      if (request.method === "DELETE" && url.pathname.startsWith("/secrets/")) {
+        const id = decodeURIComponent(url.pathname.slice("/secrets/".length));
+        return json(response, (await secrets.revoke(id)) ? 200 : 404, { id });
+      }
       if (request.method === "POST" && url.pathname.startsWith("/artifacts/")) {
         const id = decodeURIComponent(url.pathname.slice("/artifacts/".length));
         const descriptor = await artifacts.put(
@@ -176,6 +196,8 @@ export async function startWorkerServer(
       : new PiRpcExecutor(tasks, {
           cwd: options.dataDir,
           runner: createExecutionRunner(config.runner),
+          ...(options.rpcCommand ? { command: options.rpcCommand } : {}),
+          ...(options.rpcArgs ? { baseArgs: options.rpcArgs } : {}),
         });
   const startedTasks = new Set<string>();
   const taskLifecycle = tasks.subscribe((event) => {
@@ -188,9 +210,26 @@ export async function startWorkerServer(
       !startedTasks.has(event.taskId)
     ) {
       startedTasks.add(event.taskId);
-      const taskDir = join(options.dataDir, "tasks", event.taskId);
-      void mkdir(taskDir, { recursive: true, mode: 0o700 })
-        .then(() => executor.start(record, join(taskDir, "session.jsonl")))
+      void prepareTask(options.dataDir, artifacts, secrets, record)
+        .then((prepared) =>
+          executor.start(
+            record,
+            prepared.sessionPath,
+            prepared.workspace,
+            async (succeeded) => {
+              try {
+                return succeeded
+                  ? await collectTaskResults(artifacts, record, prepared)
+                  : {};
+              } finally {
+                await cleanupPreparedTask(prepared);
+              }
+            },
+            prepared.runtimeAgentDir
+              ? { PI_CODING_AGENT_DIR: prepared.runtimeAgentDir }
+              : {},
+          ),
+        )
         .catch((error: unknown) =>
           tasks.settle(event.taskId, "failed", {
             error: error instanceof Error ? error.message : String(error),

@@ -49,7 +49,7 @@ test("runs a Pi RPC-compatible process and forwards its events", async () => {
     command: process.execPath,
     baseArgs: [
       "-e",
-      "process.stdin.on('data',()=>{ console.log(JSON.stringify({type:'agent_start'})); process.exit(0) })",
+      "process.stdin.on('data',()=>{ console.log(JSON.stringify({type:'agent_start'})); console.log(JSON.stringify({type:'agent_settled'})) })",
       "--",
     ],
     cwd: await mkdtemp(join(tmpdir(), "pi-cloud-rpc-")),
@@ -67,7 +67,7 @@ test("runs a Pi RPC-compatible process and forwards its events", async () => {
   executor.dispose();
   assert.equal(tasks.get("rpc-task")?.status, "completed");
   assert.equal(
-    events.some((payload) => JSON.stringify(payload).includes("agent_start")),
+    events.some((payload) => JSON.stringify(payload).includes("agent_settled")),
     true,
   );
 });

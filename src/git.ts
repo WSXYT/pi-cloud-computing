@@ -1,6 +1,8 @@
+import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 
 import { sha256 } from "./environment.js";
@@ -20,6 +22,11 @@ export interface GitSnapshot {
   baseline: GitBaseline;
   files: GitSnapshotFile[];
   snapshotSha256: string;
+}
+
+export interface WorkspaceArchive {
+  bundleBase64: string;
+  snapshot: GitSnapshot;
 }
 
 async function git(cwd: string, args: string[]): Promise<string> {
@@ -137,6 +144,103 @@ export async function createGitSnapshot(
     files,
     snapshotSha256: sha256(stableJson({ baseline, files })),
   };
+}
+
+export async function createGitResultSnapshot(
+  cwd: string,
+  baseline: GitBaseline,
+): Promise<GitSnapshot> {
+  const { tracked, untracked } = await statusFiles(cwd);
+  const committed = parseNullSeparated(
+    await git(cwd, ["diff", "--name-only", "-z", baseline.head, "HEAD"]),
+  );
+  const paths = [...new Set([...tracked, ...untracked, ...committed])]
+    .filter((path) => !path.startsWith(".pi-cloud-"))
+    .sort();
+  const files: GitSnapshotFile[] = [];
+  for (const path of paths) files.push(await readTrackedFile(cwd, path));
+  return {
+    baseline,
+    files,
+    snapshotSha256: sha256(stableJson({ baseline, files })),
+  };
+}
+
+export async function createWorkspaceArchive(
+  cwd: string,
+  includedUntracked: string[] = [],
+): Promise<WorkspaceArchive> {
+  const temporary = await mkdtemp(join(tmpdir(), "pi-cloud-bundle-"));
+  const bundlePath = join(temporary, "repository.bundle");
+  try {
+    await git(cwd, ["bundle", "create", bundlePath, "--all"]);
+    return {
+      bundleBase64: (await readFile(bundlePath)).toString("base64"),
+      snapshot: await createGitSnapshot(cwd, includedUntracked),
+    };
+  } finally {
+    await rm(temporary, { recursive: true, force: true });
+  }
+}
+
+export async function materializeWorkspaceArchive(
+  archive: WorkspaceArchive,
+  destination: string,
+): Promise<void> {
+  if (!archive.bundleBase64 || !archive.snapshot)
+    throw new Error("invalid workspace archive");
+  const temporary = join(tmpdir(), `pi-cloud-${randomUUID()}.bundle`);
+  await mkdir(dirname(destination), { recursive: true });
+  await writeFile(temporary, Buffer.from(archive.bundleBase64, "base64"), {
+    flag: "wx",
+    mode: 0o600,
+  });
+  try {
+    await execFileAsync("git", ["clone", "--quiet", temporary, destination], {
+      encoding: "utf8",
+      maxBuffer: 16 * 1024 * 1024,
+    });
+    const root = resolve(destination);
+    for (const file of archive.snapshot.files) {
+      const path = resolve(root, file.path);
+      if (
+        path !== root &&
+        !path.startsWith(`${root}/`) &&
+        !path.startsWith(`${root}\\`)
+      )
+        throw new Error(`workspace path escapes repository: ${file.path}`);
+      if (file.status === "deleted") await rm(path, { force: true });
+      else {
+        if (!file.contentBase64)
+          throw new Error(`workspace file has no content: ${file.path}`);
+        await mkdir(dirname(path), { recursive: true });
+        await writeFile(path, Buffer.from(file.contentBase64, "base64"));
+      }
+    }
+  } finally {
+    await rm(temporary, { force: true });
+  }
+}
+
+export function serializeWorkspaceArchive(archive: WorkspaceArchive): string {
+  return `${stableJson(archive)}\n`;
+}
+
+export function parseWorkspaceArchive(value: string): WorkspaceArchive {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new Error("invalid workspace archive JSON");
+  }
+  if (
+    !parsed ||
+    typeof parsed !== "object" ||
+    !("bundleBase64" in parsed) ||
+    !("snapshot" in parsed)
+  )
+    throw new Error("invalid workspace archive");
+  return parsed as WorkspaceArchive;
 }
 
 export async function currentGitMatches(
