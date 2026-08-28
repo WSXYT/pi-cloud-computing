@@ -24,7 +24,9 @@ const run = promisify(execFile);
 test("pairs, uploads a repository, runs RPC, and returns Git results", async () => {
   const source = await mkdtemp(join(tmpdir(), "pi-cloud-e2e-source-"));
   await run("git", ["init", "-q"], { cwd: source });
-  await run("git", ["config", "user.email", "test@example.com"], { cwd: source });
+  await run("git", ["config", "user.email", "test@example.com"], {
+    cwd: source,
+  });
   await run("git", ["config", "user.name", "Pi Cloud Test"], { cwd: source });
   await writeFile(join(source, "file.txt"), "before\n");
   await run("git", ["add", "file.txt"], { cwd: source });
@@ -33,7 +35,11 @@ test("pairs, uploads a repository, runs RPC, and returns Git results", async () 
   const workspaceData = Buffer.from(serializeWorkspaceArchive(archive));
 
   const dataDir = await mkdtemp(join(tmpdir(), "pi-cloud-e2e-worker-"));
-  await saveWorkerConfig({ ...defaultWorkerConfig(dataDir), publicIp: "127.0.0.1", runner: "host" });
+  await saveWorkerConfig({
+    ...defaultWorkerConfig(dataDir),
+    publicIp: "127.0.0.1",
+    runner: "host",
+  });
   const state = await loadWorkerState(dataDir);
   const pairing = createPairing(state);
   await saveWorkerState(dataDir, state);
@@ -54,7 +60,10 @@ test("pairs, uploads a repository, runs RPC, and returns Git results", async () 
   try {
     const currentState = await loadWorkerState(dataDir);
     assert.ok(currentState.certificateFingerprint);
-    const connection = new CloudConnection(worker.url, currentState.certificateFingerprint);
+    const connection = new CloudConnection(
+      worker.url,
+      currentState.certificateFingerprint,
+    );
     await connection.pair(pairing.code);
     await connection.upload("workspace", workspaceData, "application/json");
 
@@ -63,25 +72,63 @@ test("pairs, uploads a repository, runs RPC, and returns Git results", async () 
       projectId: "project",
       prompt: "create remote.txt",
       runner: "host",
-      environment: { piVersion: "0.84.2", nodeVersion: "24", platform: "linux", packages: [], resources: [], providers: [], secretVersions: [], warnings: [] },
+      environment: {
+        piVersion: "0.84.2",
+        nodeVersion: "24",
+        platform: "linux",
+        packages: [],
+        resources: [],
+        providers: [],
+        secretVersions: [],
+        warnings: [],
+      },
       git: archive.snapshot.baseline,
-      session: { sessionId: "new", baseLeafId: null, lastEntryId: null, entriesSha256: "empty" },
-      artifacts: [{ id: "workspace", kind: "workspace", size: workspaceData.byteLength, sha256: sha256(workspaceData), contentType: "application/json" }],
+      session: {
+        sessionId: "new",
+        baseLeafId: null,
+        lastEntryId: null,
+        entriesSha256: "empty",
+      },
+      artifacts: [
+        {
+          id: "workspace",
+          kind: "workspace",
+          size: workspaceData.byteLength,
+          sha256: sha256(workspaceData),
+          contentType: "application/json",
+        },
+      ],
       secretIds: [],
     };
     const frames: ProtocolFrame[] = [];
     const socket = await connection.openEvents((frame) => frames.push(frame));
     connection.send(socket, { type: "task_create", task });
-    for (let attempt = 0; attempt < 120 && worker.tasks.get(task.taskId)?.status !== "completed"; attempt += 1)
+    for (
+      let attempt = 0;
+      attempt < 120 && worker.tasks.get(task.taskId)?.status !== "completed";
+      attempt += 1
+    )
       await new Promise((resolve) => setTimeout(resolve, 25));
     const record = worker.tasks.get(task.taskId);
     assert.equal(record?.status, "completed");
-    const statusEvent = record.events.findLast((event) => event.payload.status === "completed");
-    const resultArtifactId = String(statusEvent?.payload.resultArtifactId ?? "");
+    const statusEvent = record.events.findLast(
+      (event) => event.payload.status === "completed",
+    );
+    const resultArtifactId = String(
+      statusEvent?.payload.resultArtifactId ?? "",
+    );
     assert.ok(resultArtifactId);
-    const result = parseGitSnapshot((await connection.download(resultArtifactId)).toString("utf8"));
-    assert.deepEqual(result.files.map((file) => file.path), ["remote.txt"]);
-    assert.equal(frames.some((frame) => frame.type === "task_accepted"), true);
+    const result = parseGitSnapshot(
+      (await connection.download(resultArtifactId)).toString("utf8"),
+    );
+    assert.deepEqual(
+      result.files.map((file) => file.path),
+      ["remote.txt"],
+    );
+    assert.equal(
+      frames.some((frame) => frame.type === "task_accepted"),
+      true,
+    );
     socket.terminate();
   } finally {
     await worker.close();

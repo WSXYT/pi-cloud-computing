@@ -60,12 +60,24 @@ test("materializes a complete repository and creates a return snapshot", async (
   const parent = await mkdtemp(join(tmpdir(), "pi-cloud-workspace-target-"));
   const destination = join(parent, "repo");
   await materializeWorkspaceArchive(archive, destination);
-  assert.equal(await readFile(join(destination, "tracked.txt"), "utf8"), "local change\n");
-  assert.equal(await readFile(join(destination, "extra.txt"), "utf8"), "selected untracked\n");
+  assert.equal(
+    await readFile(join(destination, "tracked.txt"), "utf8"),
+    "local change\n",
+  );
+  assert.equal(
+    await readFile(join(destination, "extra.txt"), "utf8"),
+    "selected untracked\n",
+  );
 
   await writeFile(join(destination, "tracked.txt"), "remote result\n");
-  const result = await createGitResultSnapshot(destination, archive.snapshot.baseline);
-  assert.deepEqual(result.files.map((file) => file.path), ["extra.txt", "tracked.txt"]);
+  const result = await createGitResultSnapshot(
+    destination,
+    archive.snapshot.baseline,
+  );
+  assert.deepEqual(
+    result.files.map((file) => file.path),
+    ["extra.txt", "tracked.txt"],
+  );
 });
 
 test("rejects invalid snapshots", () => {

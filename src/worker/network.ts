@@ -12,9 +12,13 @@ export function privateAddresses(): string[] {
   return [...addresses].sort();
 }
 
-export async function publicAddress(fetcher: typeof fetch = fetch): Promise<string | null> {
+export async function publicAddress(
+  fetcher: typeof fetch = fetch,
+): Promise<string | null> {
   try {
-    const response = await fetcher("https://api.ipify.org", { signal: AbortSignal.timeout(5000) });
+    const response = await fetcher("https://api.ipify.org", {
+      signal: AbortSignal.timeout(5000),
+    });
     if (!response.ok) return null;
     const value = (await response.text()).trim();
     return isIP(value) > 0 ? value : null;
@@ -23,6 +27,11 @@ export async function publicAddress(fetcher: typeof fetch = fetch): Promise<stri
   }
 }
 
-export async function discoverWorkerAddresses(fetcher: typeof fetch = fetch): Promise<{ publicIp: string | null; privateIps: string[] }> {
-  return { publicIp: await publicAddress(fetcher), privateIps: privateAddresses() };
+export async function discoverWorkerAddresses(
+  fetcher: typeof fetch = fetch,
+): Promise<{ publicIp: string | null; privateIps: string[] }> {
+  return {
+    publicIp: await publicAddress(fetcher),
+    privateIps: privateAddresses(),
+  };
 }

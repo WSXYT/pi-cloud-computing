@@ -2,6 +2,7 @@ import type {
   TaskEvent,
   TaskInput,
   TaskResult,
+  TaskSnapshot,
   TaskSpec,
   TaskStatus,
 } from "../protocol.js";
@@ -54,9 +55,44 @@ export class WorkerTaskManager {
   restore(records: TaskRecord[]): void {
     this.tasks.clear();
     this.activeTaskId = undefined;
-    for (const record of records) this.tasks.set(record.task.taskId, record);
-    const active = records.find((record) => record.status === "running");
-    this.activeTaskId = active?.task.taskId;
+    for (const record of records) {
+      if (record.status === "running") {
+        record.status = "failed";
+        record.result = {
+          taskId: record.task.taskId,
+          status: "failed",
+          error: "Worker restarted while the task was running",
+          retryable: true,
+        };
+        record.events.push({
+          taskId: record.task.taskId,
+          cursor: ++record.cursor,
+          kind: "status",
+          payload: {
+            status: "failed",
+            error: record.result.error,
+            retryable: true,
+          },
+        });
+      }
+      this.tasks.set(record.task.taskId, record);
+    }
+    const next = [...this.tasks.values()].find(
+      (task) => task.status === "queued",
+    );
+    if (next) {
+      this.activeTaskId = next.task.taskId;
+      next.status = "running";
+      this.emit(next.task.taskId, "status", { status: "running" });
+    }
+    this.changed();
+  }
+
+  startRestored(): void {
+    const active = this.active();
+    if (!active || active.status !== "running") return;
+    this.emit(active.task.taskId, "status", { status: "running" });
+    this.changed();
   }
 
   exportState(): TaskRecord[] {
@@ -73,6 +109,17 @@ export class WorkerTaskManager {
 
   active(): TaskRecord | undefined {
     return this.activeTaskId ? this.tasks.get(this.activeTaskId) : undefined;
+  }
+
+  snapshot(taskId: string): TaskSnapshot {
+    const task = this.tasks.get(taskId);
+    if (!task) throw new Error("task not found");
+    return {
+      taskId,
+      status: task.status,
+      cursor: task.cursor,
+      ...(task.result ? { result: task.result } : {}),
+    };
   }
 
   eventsAfter(taskId: string, afterCursor: number): TaskEvent[] {
@@ -100,6 +147,7 @@ export class WorkerTaskManager {
     if (task.status !== "running" && task.status !== "queued")
       throw new Error("task is not active");
     task.status = "aborted";
+    task.result = { taskId, status: "aborted" };
     this.emit(taskId, "status", { status: "aborted" });
     if (this.activeTaskId === taskId) this.activateNext();
     this.changed();
@@ -125,6 +173,7 @@ export class WorkerTaskManager {
     const task = this.tasks.get(taskId);
     if (!task) throw new Error("task not found");
     task.status = status;
+    task.result = { taskId, status, ...payload };
     this.emit(taskId, "status", { status, ...payload });
     if (this.activeTaskId === taskId) this.activateNext();
     this.changed();

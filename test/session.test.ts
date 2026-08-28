@@ -4,6 +4,7 @@ import test from "node:test";
 import { sha256 } from "../src/environment.js";
 import {
   extractRemoteTail,
+  exportSessionBranch,
   mergeSessionTail,
   parseSessionArchive,
   serializeSessionArchive,
@@ -46,6 +47,23 @@ test("exports and parses a native session archive", () => {
     parseSessionArchive(serializeSessionArchive(original)),
     original,
   );
+});
+
+test("exports only durable cloud session entries", () => {
+  const entries = [
+    entry("e1", null),
+    entry("live", "e1", "pi-cloud-live"),
+    entry("task", "live", "pi-cloud-task"),
+    entry("e2", "task"),
+  ];
+  const archive = exportSessionBranch({
+    getHeader: () => header("s1"),
+    getBranch: () => entries,
+    getLeafId: () => "e2",
+  });
+  assert.deepEqual(archive.entries.map((item) => item.id), ["e1", "e2"]);
+  assert.equal(archive.entries[1]?.parentId, "e1");
+  assert.equal(archive.leafId, "e2");
 });
 
 test("merges a linear remote tail and drops live display entries", () => {

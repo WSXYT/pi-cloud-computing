@@ -49,11 +49,40 @@ test("queues tasks, records input events, and resumes after abort", () => {
   });
   assert.equal(manager.eventsAfter("task-1", 0).length, 2);
   manager.abort("task-1");
+  assert.equal(manager.snapshot("task-1").result?.status, "aborted");
   assert.equal(manager.active()?.task.taskId, "task-2");
   assert.equal(
     manager.eventsAfter("task-1", 0).at(-1)?.payload.status,
     "aborted",
   );
+});
+
+test("marks interrupted running tasks as retryable after restore", () => {
+  const manager = new WorkerTaskManager();
+  manager.restore([
+    {
+      task: task("task-restarted"),
+      status: "running",
+      cursor: 0,
+      events: [],
+      inputs: [],
+    },
+    {
+      task: task("task-queued"),
+      status: "queued",
+      cursor: 0,
+      events: [],
+      inputs: [],
+    },
+  ]);
+  const snapshot = manager.snapshot("task-restarted");
+  assert.equal(snapshot.status, "failed");
+  assert.equal(snapshot.result?.retryable, true);
+  assert.equal(
+    manager.eventsAfter("task-restarted", 0)[0]?.payload.status,
+    "failed",
+  );
+  assert.equal(manager.snapshot("task-queued").status, "running");
 });
 
 test("replays only events after a cursor", () => {

@@ -27,9 +27,13 @@ export async function prepareTask(
   const taskDir = join(dataDir, "tasks", record.task.taskId);
   const workspace = join(taskDir, "workspace");
   await mkdir(taskDir, { recursive: true, mode: 0o700 });
-  const workspaceArtifact = record.task.artifacts.find((artifact) => artifact.kind === "workspace");
+  const workspaceArtifact = record.task.artifacts.find(
+    (artifact) => artifact.kind === "workspace",
+  );
   if (!workspaceArtifact) throw new Error("workspace artifact is required");
-  const archive = parseWorkspaceArchive((await artifacts.read(workspaceArtifact.id)).toString("utf8"));
+  const archive = parseWorkspaceArchive(
+    (await artifacts.read(workspaceArtifact.id)).toString("utf8"),
+  );
   await materializeWorkspaceArchive(archive, workspace);
 
   let runtimeAgentDir: string | undefined;
@@ -41,20 +45,35 @@ export async function prepareTask(
     await writeFile(join(runtimeAgentDir, "auth.json"), auth, { mode: 0o600 });
   }
 
-  const sessionArtifact = record.task.artifacts.find((artifact) => artifact.kind === "session");
-  if (!sessionArtifact) return { workspace, ...(runtimeAgentDir ? { runtimeAgentDir } : {}) };
-  const session = parseSessionArchive((await artifacts.read(sessionArtifact.id)).toString("utf8"));
+  const sessionArtifact = record.task.artifacts.find(
+    (artifact) => artifact.kind === "session",
+  );
+  if (!sessionArtifact)
+    return { workspace, ...(runtimeAgentDir ? { runtimeAgentDir } : {}) };
+  const session = parseSessionArchive(
+    (await artifacts.read(sessionArtifact.id)).toString("utf8"),
+  );
   const sessionPath = join(workspace, ".pi-cloud-session.jsonl");
   await writeFile(
     sessionPath,
-    serializeSessionArchive({ ...session, header: { ...session.header, cwd: workspace } }),
+    serializeSessionArchive({
+      ...session,
+      header: { ...session.header, cwd: workspace },
+    }),
     { mode: 0o600 },
   );
-  return { workspace, sessionPath, ...(runtimeAgentDir ? { runtimeAgentDir } : {}) };
+  return {
+    workspace,
+    sessionPath,
+    ...(runtimeAgentDir ? { runtimeAgentDir } : {}),
+  };
 }
 
-export async function cleanupPreparedTask(prepared: PreparedTask): Promise<void> {
-  if (prepared.runtimeAgentDir) await rm(prepared.runtimeAgentDir, { recursive: true, force: true });
+export async function cleanupPreparedTask(
+  prepared: PreparedTask,
+): Promise<void> {
+  if (prepared.runtimeAgentDir)
+    await rm(prepared.runtimeAgentDir, { recursive: true, force: true });
 }
 
 export async function collectTaskResults(
@@ -62,13 +81,27 @@ export async function collectTaskResults(
   record: TaskRecord,
   prepared: PreparedTask,
 ): Promise<Record<string, unknown>> {
-  const result = await createGitResultSnapshot(prepared.workspace, record.task.git);
+  const result = await createGitResultSnapshot(
+    prepared.workspace,
+    record.task.git,
+  );
   const resultArtifactId = `${record.task.taskId}-result-git.json`;
-  await artifacts.put(resultArtifactId, Buffer.from(serializeGitSnapshot(result)), "application/json");
-  const payload: Record<string, unknown> = { resultArtifactId, changedFiles: result.files.length };
+  await artifacts.put(
+    resultArtifactId,
+    Buffer.from(serializeGitSnapshot(result)),
+    "application/json",
+  );
+  const payload: Record<string, unknown> = {
+    resultArtifactId,
+    changedFiles: result.files.length,
+  };
   if (prepared.sessionPath) {
     const sessionArtifactId = `${record.task.taskId}-result-session.jsonl`;
-    await artifacts.put(sessionArtifactId, await readFile(prepared.sessionPath), "application/jsonl");
+    await artifacts.put(
+      sessionArtifactId,
+      await readFile(prepared.sessionPath),
+      "application/jsonl",
+    );
     payload.sessionArtifactId = sessionArtifactId;
   }
   return payload;

@@ -95,7 +95,9 @@ export class PiRpcExecutor {
           { exitCode: code, signal, ...payload },
         );
       } catch (error) {
-        this.tasks.settle(record.task.taskId, "failed", { error: error instanceof Error ? error.message : String(error) });
+        this.tasks.settle(record.task.taskId, "failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
       }
     });
     this.write(child, { type: "prompt", message: record.task.prompt });
@@ -151,7 +153,8 @@ export class PiRpcExecutor {
     });
     child.stdout.once("end", () => {
       pending += decoder.end();
-      if (pending.trim() && this.forwardEvent(taskId, pending.trim())) onSettled();
+      if (pending.trim() && this.forwardEvent(taskId, pending.trim()))
+        onSettled();
     });
     child.stderr.on("data", (chunk: Buffer) =>
       this.tasks.log(taskId, {

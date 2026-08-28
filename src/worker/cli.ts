@@ -12,7 +12,12 @@ import { startWorkerServer } from "./server.js";
 import { cleanupExpiredTasks, writeSystemdUnit } from "./service.js";
 import { discoverWorkerAddresses } from "./network.js";
 
-function pairingOutput(config: Awaited<ReturnType<typeof loadWorkerConfig>>, fingerprint: string, pairing: { code: string; expiresAt: string }, stdout: (message: string) => void): void {
+function pairingOutput(
+  config: Awaited<ReturnType<typeof loadWorkerConfig>>,
+  fingerprint: string,
+  pairing: { code: string; expiresAt: string },
+  stdout: (message: string) => void,
+): void {
   const address = `https://${config.publicIp}:${config.port}`;
   stdout(`address=${address}`);
   stdout(`fingerprint=${fingerprint}`);
@@ -50,18 +55,32 @@ export async function runWorkerCli(
   }
   if (scope === "worker" && command === "tokens") {
     const state = await loadWorkerState(config.dataDir);
-    stdout(JSON.stringify(state.tokens.map(({ id, createdAt, revokedAt }) => ({ id, createdAt, revokedAt: revokedAt ?? null })), null, 2));
+    stdout(
+      JSON.stringify(
+        state.tokens.map(({ id, createdAt, revokedAt }) => ({
+          id,
+          createdAt,
+          revokedAt: revokedAt ?? null,
+        })),
+        null,
+        2,
+      ),
+    );
     return 0;
   }
   if (scope === "worker" && command === "token" && key === "revoke" && value) {
     const state = await loadWorkerState(config.dataDir);
-    if (!revokeToken(state, value)) throw new Error(`active token not found: ${value}`);
+    if (!revokeToken(state, value))
+      throw new Error(`active token not found: ${value}`);
     await saveWorkerState(config.dataDir, state);
     stdout(`revoked-token=${value}`);
     return 0;
   }
   if (scope === "worker" && command === "pair") {
-    const tls = await ensureSelfSignedCertificate(config.dataDir, config.publicIp);
+    const tls = await ensureSelfSignedCertificate(
+      config.dataDir,
+      config.publicIp,
+    );
     const state = await loadWorkerState(config.dataDir);
     state.certificateFingerprint = tls.fingerprint;
     const pairing = createPairing(state);
@@ -120,8 +139,13 @@ export async function runWorkerCli(
   }
   if (scope === "worker" && command === "install") {
     const detected = await discoverWorkerAddresses();
-    const configuredIp = config.publicIp === "127.0.0.1" ? undefined : config.publicIp;
-    const ip = flagValue(args, "--ip") ?? configuredIp ?? detected.publicIp ?? detected.privateIps[0];
+    const configuredIp =
+      config.publicIp === "127.0.0.1" ? undefined : config.publicIp;
+    const ip =
+      flagValue(args, "--ip") ??
+      configuredIp ??
+      detected.publicIp ??
+      detected.privateIps[0];
     if (!ip) throw new Error("No Worker IP detected; pass --ip <address>");
     config = setWorkerConfigValue(config, "ip", ip);
     await saveWorkerConfig(config);

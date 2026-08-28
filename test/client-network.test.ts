@@ -4,7 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { CloudConnection, normalizeFingerprint } from "../src/client-network.js";
+import {
+  CloudConnection,
+  normalizeFingerprint,
+} from "../src/client-network.js";
 import { createPairing } from "../src/worker/pairing.js";
 import { startWorkerServer } from "../src/worker/server.js";
 import { SecretStore } from "../src/worker/secrets.js";
@@ -30,13 +33,22 @@ test("keeps the verified certificate pin across pairing, uploads, and WSS", asyn
     const fingerprint = normalizeFingerprint(state.certificateFingerprint);
     const connection = new CloudConnection(worker.url, fingerprint);
     const paired = await connection.pair(pairing.code);
-    assert.equal(normalizeFingerprint(paired.certificateFingerprint), fingerprint);
+    assert.equal(
+      normalizeFingerprint(paired.certificateFingerprint),
+      fingerprint,
+    );
     const wrongPin = new CloudConnection(worker.url, "00", paired.token);
-    await assert.rejects(() => wrongPin.upload("wrong-pin", Buffer.from("blocked"), "text/plain"), /CERTIFICATE_MISMATCH/);
+    await assert.rejects(
+      () => wrongPin.upload("wrong-pin", Buffer.from("blocked"), "text/plain"),
+      /CERTIFICATE_MISMATCH/,
+    );
     await connection.upload("first", Buffer.from("one"), "text/plain");
     await connection.upload("second", Buffer.from("two"), "text/plain");
-    await connection.uploadSecret("pi-auth", "{\"provider\":\"secret\"}");
-    assert.equal(await (await SecretStore.open(dataDir)).get("pi-auth"), "{\"provider\":\"secret\"}");
+    await connection.uploadSecret("pi-auth", '{"provider":"secret"}');
+    assert.equal(
+      await (await SecretStore.open(dataDir)).get("pi-auth"),
+      '{"provider":"secret"}',
+    );
     const socket = await connection.openEvents(() => undefined);
     socket.terminate();
   } finally {
@@ -60,7 +72,10 @@ test("accepts a new one-time pairing code without restarting the Worker", async 
     const pairing = createPairing(state);
     await saveWorkerState(dataDir, state);
     assert.ok(state.certificateFingerprint);
-    const connection = new CloudConnection(worker.url, state.certificateFingerprint);
+    const connection = new CloudConnection(
+      worker.url,
+      state.certificateFingerprint,
+    );
     const paired = await connection.pair(pairing.code);
     assert.ok(paired.token);
   } finally {

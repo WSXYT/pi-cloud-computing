@@ -11,7 +11,10 @@ import {
 
 test("keeps Chinese and English catalogs in parity", () => {
   assert.deepEqual(Object.keys(catalogs.en).sort(), [...MESSAGE_KEYS].sort());
-  assert.deepEqual(Object.keys(catalogs["zh-CN"]).sort(), [...MESSAGE_KEYS].sort());
+  assert.deepEqual(
+    Object.keys(catalogs["zh-CN"]).sort(),
+    [...MESSAGE_KEYS].sort(),
+  );
   for (const key of MESSAGE_KEYS) {
     assert.notEqual(translate("zh-CN", key), "");
     assert.notEqual(translate("en", key), "");

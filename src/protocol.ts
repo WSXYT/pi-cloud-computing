@@ -128,13 +128,20 @@ export interface TaskEvent {
 export interface TaskResult {
   taskId: string;
   status: Extract<TaskStatus, "completed" | "failed" | "aborted">;
-  git: GitBaseline & { resultCommit: string; patchArtifactId: string };
-  session: SessionCursor & {
-    remoteSessionArtifactId: string;
-    newEntryCount: number;
-  };
-  warnings: string[];
-  artifacts: ArtifactDescriptor[];
+  resultArtifactId?: string;
+  sessionArtifactId?: string;
+  changedFiles?: number;
+  error?: string;
+  retryable?: boolean;
+  exitCode?: number | null;
+  signal?: NodeJS.Signals | null;
+}
+
+export interface TaskSnapshot {
+  taskId: string;
+  status: TaskStatus;
+  cursor: number;
+  result?: TaskResult;
 }
 
 export type ClientFrame =
@@ -143,7 +150,8 @@ export type ClientFrame =
   | { type: "task_create"; task: TaskSpec }
   | { type: "task_input"; input: TaskInput }
   | { type: "task_abort"; taskId: string }
-  | { type: "task_resume"; taskId: string; afterCursor: number };
+  | { type: "task_resume"; taskId: string; afterCursor: number }
+  | { type: "task_status"; taskId: string };
 
 export type WorkerFrame =
   | { type: "hello_ack"; protocolVersion: number; worker: WorkerIdentity }
@@ -151,6 +159,7 @@ export type WorkerFrame =
   | { type: "task_accepted"; taskId: string; status: TaskStatus }
   | { type: "task_event"; event: TaskEvent }
   | { type: "task_result"; result: TaskResult }
+  | { type: "task_state"; state: TaskSnapshot }
   | { type: "error"; requestType?: ClientFrame["type"]; error: ProtocolError };
 
 export type ProtocolFrame = ClientFrame | WorkerFrame;
@@ -162,6 +171,7 @@ const CLIENT_TYPES = new Set<ClientFrame["type"]>([
   "task_input",
   "task_abort",
   "task_resume",
+  "task_status",
 ]);
 const WORKER_TYPES = new Set<WorkerFrame["type"]>([
   "hello_ack",
@@ -169,6 +179,7 @@ const WORKER_TYPES = new Set<WorkerFrame["type"]>([
   "task_accepted",
   "task_event",
   "task_result",
+  "task_state",
   "error",
 ]);
 
@@ -271,6 +282,11 @@ export function parseFrame(json: string): ProtocolFrame {
         type: "task_resume",
         taskId: requireString(frame.taskId, "taskId"),
         afterCursor: requireNumber(frame.afterCursor, "afterCursor"),
+      };
+    case "task_status":
+      return {
+        type: "task_status",
+        taskId: requireString(frame.taskId, "taskId"),
       };
     default:
       // SAFETY: worker frames are decoded by the worker-side handler before use;

@@ -25,10 +25,31 @@ export function attachTaskWebSocket(
 ): TaskSocket {
   const sockets = new Set<WebSocket>();
   const wss = new WebSocketServer({ noServer: true });
+  const send = (
+    socket: WebSocket,
+    frame: Parameters<typeof encodeFrame>[0],
+  ): void => {
+    if (socket.readyState === WebSocket.OPEN) socket.send(encodeFrame(frame));
+  };
+  const sendState = (socket: WebSocket, taskId: string): void => {
+    const snapshot = tasks.snapshot(taskId);
+    send(socket, { type: "task_state", state: snapshot });
+    if (snapshot.result)
+      send(socket, { type: "task_result", result: snapshot.result });
+  };
   const unsubscribe = tasks.subscribe((event) => {
     const message = encodeFrame({ type: "task_event", event });
     for (const socket of sockets)
       if (socket.readyState === WebSocket.OPEN) socket.send(message);
+    if (
+      ["completed", "failed", "aborted"].includes(String(event.payload.status))
+    ) {
+      try {
+        for (const socket of sockets) sendState(socket, event.taskId);
+      } catch {
+        // The event remains durable and can be replayed after reconnect.
+      }
+    }
   });
 
   const upgrade = (request: IncomingMessage, socket: Duplex, head: Buffer) => {
@@ -94,7 +115,10 @@ export function attachTaskWebSocket(
             frame.taskId,
             frame.afterCursor,
           ))
-            socket.send(encodeFrame({ type: "task_event", event }));
+            send(socket, { type: "task_event", event });
+          sendState(socket, frame.taskId);
+        } else if (frame.type === "task_status") {
+          sendState(socket, frame.taskId);
         }
       } catch (error) {
         socket.send(

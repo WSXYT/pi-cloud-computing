@@ -134,9 +134,14 @@ export async function startWorkerServer(
         });
       if (request.method === "POST" && url.pathname.startsWith("/secrets/")) {
         const id = decodeURIComponent(url.pathname.slice("/secrets/".length));
-        if (!/^[A-Za-z0-9._-]+$/.test(id)) return json(response, 400, { error: "SECRET_INVALID" });
+        if (!/^[A-Za-z0-9._-]+$/.test(id))
+          return json(response, 400, { error: "SECRET_INVALID" });
         const version = Number(request.headers["x-secret-version"] ?? 1);
-        const metadata = await secrets.put(id, version, (await body(request)).toString("utf8"));
+        const metadata = await secrets.put(
+          id,
+          version,
+          (await body(request)).toString("utf8"),
+        );
         return json(response, 201, metadata);
       }
       if (request.method === "DELETE" && url.pathname.startsWith("/secrets/")) {
@@ -190,6 +195,7 @@ export async function startWorkerServer(
     void persistence.catch(() => undefined);
   });
   tasks.restore(persistedTasks);
+  await persistence;
   const executor =
     options.enableExecution === false
       ? null
@@ -249,12 +255,13 @@ export async function startWorkerServer(
   const address = server.address();
   const port =
     typeof address === "object" && address ? address.port : listenPort;
+  tasks.startRestored();
   for (const record of persistedTasks.filter(
-    (item) => item.status === "running",
+    (item) => item.status === "running" && tasks.get(item.task.taskId)?.status === "running",
   )) {
     tasks.log(record.task.taskId, {
       status: "recovered",
-      message: "Task recovered after Worker restart",
+      message: "Task was interrupted by a Worker restart",
     });
   }
   return {

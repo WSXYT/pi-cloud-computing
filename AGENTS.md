@@ -17,9 +17,12 @@
 - Treat certificate pins, pairing tokens, provider credentials, artifact paths, Git baselines, and session entry IDs as security boundaries.
 - Remote workspace changes must return as reviewable artifacts; never overwrite local files without baseline verification.
 - Pi credentials are opt-in, encrypted at rest on the Worker, and removed from the temporary runtime directory after execution.
+- Remote task recovery must preserve durable task state, replay cursored WebSocket events, and expose terminal results through `task_state`/`task_result`.
+- Session synchronization must exclude `pi-cloud-live` and `pi-cloud-task` entries and validate Git/session baselines before applying results.
 
 ## Verification
 - Run `npm run check && npm test` after code changes.
+- Run `npm run pack:smoke` to verify the published Pi extension and Worker bundle.
 - Run `bash -n scripts/install.sh` after shell installer changes.
 - CI validates Ubuntu, Windows, macOS, and both Docker images.
 <!-- pi-agents-md:end -->

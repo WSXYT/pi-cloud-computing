@@ -69,12 +69,12 @@ function entriesJson(entries: SessionEntry[]): string {
 export function exportSessionBranch(reader: SessionReader): SessionArchive {
   const header = reader.getHeader();
   if (!header) throw new Error("session has no header");
-  const entries = reader.getBranch();
+  const entries = durableEntries(reader.getBranch());
   validateSessionEntries(entries);
   return {
     header,
     entries,
-    leafId: reader.getLeafId(),
+    leafId: entries.at(-1)?.id ?? null,
     entriesSha256: sha256(entriesJson(entries)),
   };
 }
@@ -124,11 +124,30 @@ export function parseSessionArchive(value: string): SessionArchive {
   };
 }
 
-function isTemporaryCloudEntry(entry: SessionEntry): boolean {
+export function isTemporaryCloudEntry(entry: SessionEntry): boolean {
   return (
     (entry.type === "custom" || entry.type === "custom_message") &&
-    entry.customType === "pi-cloud-live"
+    (entry.customType === "pi-cloud-live" ||
+      entry.customType === "pi-cloud-task")
   );
+}
+
+function durableEntries(entries: SessionEntry[]): SessionEntry[] {
+  const durable: SessionEntry[] = [];
+  const nearestDurable = new Map<string, string | null>();
+  for (const entry of entries) {
+    if (isTemporaryCloudEntry(entry)) {
+      nearestDurable.set(entry.id, durable.at(-1)?.id ?? null);
+      continue;
+    }
+    let parentId = entry.parentId;
+    while (parentId && nearestDurable.has(parentId))
+      parentId = nearestDurable.get(parentId) ?? null;
+    const normalized =
+      parentId === entry.parentId ? entry : { ...entry, parentId };
+    durable.push(normalized);
+  }
+  return durable;
 }
 
 export function extractRemoteTail(
@@ -138,15 +157,14 @@ export function extractRemoteTail(
   if (remote.header.id !== cursor.sessionId)
     throw new Error("remote session id does not match cursor");
   if (cursor.entriesSha256 === remote.entriesSha256) return [];
-  const baseIndex =
+  const entries = durableEntries(remote.entries);
+  const durableBaseIndex =
     cursor.lastEntryId === null
       ? -1
-      : remote.entries.findIndex((entry) => entry.id === cursor.lastEntryId);
-  if (cursor.lastEntryId !== null && baseIndex < 0)
+      : entries.findIndex((entry) => entry.id === cursor.lastEntryId);
+  if (cursor.lastEntryId !== null && durableBaseIndex < 0)
     throw new Error("remote session cursor is missing");
-  const tail = remote.entries
-    .slice(baseIndex + 1)
-    .filter((entry) => !isTemporaryCloudEntry(entry));
+  const tail = entries.slice(durableBaseIndex + 1);
   if (
     tail[0] &&
     tail[0].parentId !== cursor.baseLeafId &&

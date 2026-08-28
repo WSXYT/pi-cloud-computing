@@ -21,7 +21,14 @@ test("preflight supports toggling multiple items and an explicit upload action",
     mode: "tui",
     hasUI: true,
     ui: {
-      custom<T>(factory: (tui: { requestRender(): void }, theme: TestTheme, keybindings: unknown, done: (value: T) => void) => TestComponent): Promise<T> {
+      custom<T>(
+        factory: (
+          tui: { requestRender(): void },
+          theme: TestTheme,
+          keybindings: unknown,
+          done: (value: T) => void,
+        ) => TestComponent,
+      ): Promise<T> {
         return new Promise<T>((resolve) => {
           const component = factory(
             { requestRender() {} },
@@ -45,14 +52,37 @@ test("preflight supports toggling multiple items and an explicit upload action",
   const selected = await selectSyncItems(
     ctx,
     [
-      { id: "environment", label: "Environment", description: "18 resources", selected: true },
-      { id: "git", label: "Git", description: "required", selected: true, required: true },
-      { id: "session", label: "Session", description: "986 entries", selected: true },
+      {
+        id: "environment",
+        label: "Environment",
+        description: "18 resources",
+        selected: true,
+      },
+      {
+        id: "git",
+        label: "Git",
+        description: "required",
+        selected: true,
+        required: true,
+      },
+      {
+        id: "session",
+        label: "Session",
+        description: "986 entries",
+        selected: true,
+      },
     ],
-    { title: "Choose sync content", required: "required", upload: "Upload selected", cancel: "Cancel", help: "Help", empty: "Empty" },
+    {
+      title: "Choose sync content",
+      required: "required",
+      upload: "Upload selected",
+      cancel: "Cancel",
+      help: "Help",
+      empty: "Empty",
+    },
   );
 
-  assert.deepEqual([...selected ?? []], ["git"]);
+  assert.deepEqual([...(selected ?? [])], ["git"]);
   assert.match(rendered, /Upload selected/);
   assert.match(rendered, /Cancel/);
 });

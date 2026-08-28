@@ -31,7 +31,11 @@ function assertPinned(response: IncomingMessage, fingerprint: string): void {
 }
 
 export class CloudConnection {
-  private readonly agent = new Agent({ keepAlive: false, maxCachedSessions: 0, rejectUnauthorized: false });
+  private readonly agent = new Agent({
+    keepAlive: false,
+    maxCachedSessions: 0,
+    rejectUnauthorized: false,
+  });
 
   constructor(
     readonly baseUrl: string,
@@ -60,7 +64,10 @@ export class CloudConnection {
     }
     if (!value.token || !value.workerId || !value.certificateFingerprint)
       throw new Error("invalid pairing response");
-    if (normalizeFingerprint(value.certificateFingerprint) !== normalizeFingerprint(this.fingerprint))
+    if (
+      normalizeFingerprint(value.certificateFingerprint) !==
+      normalizeFingerprint(this.fingerprint)
+    )
       throw new Error("CERTIFICATE_MISMATCH");
     this.token = value.token;
     return value;

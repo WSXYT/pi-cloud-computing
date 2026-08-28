@@ -90,6 +90,70 @@ const task: TaskSpec = {
   secretIds: [],
 };
 
+test("returns task state and result on resume", async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), "pi-cloud-state-"));
+  const worker = await startWorkerServer({
+    dataDir,
+    publicIp: "127.0.0.1",
+    piVersion: "0.84.2",
+    nodeVersion: process.version,
+    gitVersion: "2.0",
+    port: 0,
+    enableExecution: false,
+  });
+  try {
+    const state = await loadWorkerState(dataDir);
+    const pairing = createPairing(state);
+    await saveWorkerState(dataDir, state);
+    const pair = await call(`${worker.url}/pair`, {
+      method: "POST",
+      body: JSON.stringify({ code: pairing.code }),
+    });
+    const token = (JSON.parse(pair.body.toString()) as { token: string }).token;
+    const socket = new WebSocket(
+      `${worker.url.replace("https:", "wss:")}/events`,
+      {
+        rejectUnauthorized: false,
+        headers: { authorization: `Bearer ${token}` },
+      },
+    );
+    const messages: string[] = [];
+    await new Promise<void>((resolve, reject) => {
+      socket.once("open", resolve);
+      socket.once("error", reject);
+    });
+    socket.on("message", (message) => messages.push(message.toString()));
+    socket.send(encodeFrame({ type: "task_create", task }));
+    await waitFor(() =>
+      messages.some((message) => message.includes('"task_accepted"')),
+    );
+    worker.tasks.settle(task.taskId, "completed", {
+      resultArtifactId: "result-1",
+      changedFiles: 1,
+    });
+    await waitFor(() =>
+      messages.some((message) => message.includes('"task_result"')),
+    );
+    const resumed: string[] = [];
+    socket.on("message", (message) => resumed.push(message.toString()));
+    socket.send(
+      encodeFrame({ type: "task_resume", taskId: task.taskId, afterCursor: 0 }),
+    );
+    await waitFor(() =>
+      resumed.some((message) => message.includes('"task_state"')),
+    );
+    assert.equal(
+      resumed.some((message) =>
+        message.includes('"resultArtifactId":"result-1"'),
+      ),
+      true,
+    );
+    socket.terminate();
+  } finally {
+    await worker.close();
+  }
+});
+
 test("serves health, pairing, manifest, and authenticated artifacts", async () => {
   const dataDir = await mkdtemp(join(tmpdir(), "pi-cloud-server-"));
   const state = await loadWorkerState(dataDir);
@@ -154,7 +218,9 @@ test("serves health, pairing, manifest, and authenticated artifacts", async () =
       encodeFrame({ type: "hello", protocolVersion: 1, clientId: "client-1" }),
     );
     socket.send(encodeFrame({ type: "task_create", task }));
-    await waitFor(() => messages.some((message) => message.includes('"task_accepted"')));
+    await waitFor(() =>
+      messages.some((message) => message.includes('"task_accepted"')),
+    );
     socket.send(
       encodeFrame({
         type: "task_input",
@@ -165,7 +231,9 @@ test("serves health, pairing, manifest, and authenticated artifacts", async () =
         },
       }),
     );
-    await waitFor(() => messages.some((message) => message.includes('"also check refresh"')));
+    await waitFor(() =>
+      messages.some((message) => message.includes('"also check refresh"')),
+    );
     assert.equal(
       messages.some((message) => message.includes('"hello_ack"')),
       true,
