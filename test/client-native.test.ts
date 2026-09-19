@@ -3,7 +3,7 @@ import { spawn, execFile, type ChildProcessWithoutNullStreams } from "node:child
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { createServer } from "node:http";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -97,7 +97,7 @@ async function until(predicate: () => boolean | Promise<boolean>, message: strin
 
 for (const history of [true, false]) {
   test(`real Pi first-command submission, reconnect, output, apply and native merge (history=${history})`, { timeout: 90_000 }, async (t) => {
-    const root = await mkdtemp(join(tmpdir(), "pi cloud native "));
+    const root = await realpath(await mkdtemp(join(tmpdir(), "pi cloud native ")));
     const cwd = join(root, "repo");
     const agentDir = join(root, "agent");
     const workerDir = join(root, "worker");
@@ -256,6 +256,10 @@ for (const history of [true, false]) {
     const native = SessionManager.open(merged.sessionFile!);
     assert.ok(native.buildSessionContext().messages.some((message) => message.role === "assistant" && JSON.stringify(message.content).includes("native remote result")));
     assert.equal(SessionManager.continueRecent(cwd, dirname(merged.sessionFile!)).getSessionId(), merged.sessionId);
+    await client.stop();
+    client = new NativePi(cwd, agentDir, answer, ["-c"]);
+    clients.push(client);
+    assert.equal((await client.state()).sessionId, merged.sessionId, "real pi -c must resume the merged conversation after restart");
     assert.deepEqual((await run("git", ["status", "--porcelain"], { cwd })).stdout.trim(), "M file.txt");
     assert.ok(!client.events.some((event) => event.type === "extension_error"), JSON.stringify(client.events));
     assert.ok(!client.events.some((event) => event.type === "extension_ui_request" && event.method === "notify" && event.notifyType === "error"), JSON.stringify(client.events));
@@ -268,7 +272,7 @@ test(`real Worker Pi (${dockerIntegration ? "docker" : "host"}) restores a provi
   // Worker execution is Linux-only. Node 24's Windows native RPC shutdown can abort in libuv (UV_HANDLE_CLOSING); do not reinterpret that nonzero exit as success.
   skip: process.platform !== "linux" ? "Linux Worker runtime; native Windows/macOS client flows are exercised above" : false,
 }, async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "pi-cloud-real-worker-"));
+  const root = await realpath(await mkdtemp(join(tmpdir(), "pi-cloud-real-worker-")));
   const cwd = join(root, "repo");
   const agentDir = join(root, "agent");
   const workerDir = join(root, "worker");

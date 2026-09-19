@@ -108,6 +108,9 @@ test("prepares an uploaded repository and returns its remote changes", async () 
   await assert.rejects(() =>
     readFile(join(prepared.runtimeAgentDir ?? "", "auth.json")),
   );
+  const container = await prepareTask(dataDir, store, secrets, { ...record, task: { ...task, taskId: "docker-session", runner: "docker" } });
+  assert.equal(parseSessionArchive(await readFile(container.sessionPath, "utf8")).header.cwd, "/task/workspace", "native Pi must see a session cwd that exists inside its container");
+  await cleanupPreparedTask(container);
   const invalidSession = await store.put(
     "bad-session",
     Buffer.from("not-json"),

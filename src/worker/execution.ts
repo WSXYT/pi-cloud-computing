@@ -106,7 +106,7 @@ export async function prepareTask(
       sessionPath,
       serializeSessionArchive({
         ...session,
-        header: { ...session.header, cwd: workspace },
+        header: { ...session.header, cwd: record.task.runner === "docker" ? "/task/workspace" : workspace },
       }),
       { mode: 0o600, flag: "wx" },
     );
