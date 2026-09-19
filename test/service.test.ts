@@ -15,6 +15,7 @@ test("renders a hardened systemd worker unit", () => {
     executable: "/usr/bin/node",
     cliPath: "/opt/pi-cloud/dist/cli.js",
   });
+  assert.match(unit, /^User=[A-Za-z0-9_.-]+$/m, "systemd User= does not accept shell-quoted account names");
   assert.match(unit, /Restart=on-failure/);
   assert.match(unit, /NoNewPrivileges=true/);
   assert.match(unit, /PI_CLOUD_DATA_DIR=\/srv\/pi-cloud/);

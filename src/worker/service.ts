@@ -19,9 +19,12 @@ function systemdQuote(value: string, executable = false): string {
 export function renderSystemdUnit(options: SystemdUnitOptions): string {
   const executable = options.executable ?? process.execPath;
   const cliPath = options.cliPath ?? process.argv[1] ?? "pi-cloud";
+  const user = userInfo();
+  const account = user.uid >= 0 ? String(user.uid) : user.username;
+  if (!/^[A-Za-z0-9_.-]+$/.test(account)) throw new Error("invalid systemd service account");
   return [
     "[Unit]", "Description=Pi Cloud Worker", "After=network-online.target", "Wants=network-online.target", "",
-    "[Service]", "Type=simple", `User=${systemdQuote(userInfo().username)}`,
+    "[Service]", "Type=simple", `User=${account}`,
     ...(options.docker ? ["SupplementaryGroups=docker"] : []),
     `ExecStart=${systemdQuote(executable, true)} ${systemdQuote(cliPath, true)} worker serve`,
     `Environment=${systemdQuote(`PI_CLOUD_DATA_DIR=${options.dataDir}`)}`,
