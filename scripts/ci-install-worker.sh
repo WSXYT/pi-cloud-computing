@@ -7,11 +7,20 @@ if [ "${GITHUB_ACTIONS:-}" != "true" ] || [ "$(uname -s)" != "Linux" ]; then
 fi
 root="$(mktemp -d "$RUNNER_TEMP/pi-cloud-install-XXXXXX")"
 cleanup() {
+  docker rm --force --volumes pi-cloud-image-ci >/dev/null 2>&1 || true
   sudo systemctl stop pi-cloud-worker.service || true
   sudo rm -f /etc/systemd/system/pi-cloud-worker.service
   sudo systemctl daemon-reload
 }
 trap cleanup EXIT
+# Building an image is not evidence that its Git/OpenSSL/runtime dependencies work.
+docker run --detach --name pi-cloud-image-ci pi-cloud-computing:ci
+for attempt in 1 2 3 4 5; do
+  if docker exec pi-cloud-image-ci node dist/src/cli.js worker health; then break; fi
+  if [ "$attempt" -eq 5 ]; then docker logs pi-cloud-image-ci; exit 1; fi
+  sleep 1
+done
+docker rm --force --volumes pi-cloud-image-ci
 # A local remote containing exactly the candidate SHA exercises the normal fetch/fast-forward path.
 git init --bare "$root/origin.git"
 git -C "$GITHUB_WORKSPACE" push "$root/origin.git" HEAD:refs/heads/main

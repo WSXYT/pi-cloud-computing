@@ -60,8 +60,10 @@ export async function runWorkerCli(args: string[], stdout = console.log): Promis
   if (scope !== "worker" && scope !== "config") { stdout(usage); return 2; }
   let config = await loadWorkerConfig();
   if (scope === "config" && command === "set" && key && value) {
-    config = setWorkerConfigValue(config, key, value);
-    await saveWorkerConfig(config);
+    await updateWorkerState(config.dataDir, async () => {
+      config = setWorkerConfigValue(await loadWorkerConfig(config.dataDir), key, value);
+      await saveWorkerConfig(config);
+    });
     stdout(`${key}=${value}`);
     stdout("restart-required=true");
     return 0;

@@ -25,7 +25,7 @@ Run a local Pi session and Git workspace on a self-hosted Linux VPS, then safely
 1. 使用简体中文还是 English。
 2. 安装本地 Pi 插件、Linux Worker，还是两者都安装。
 3. Worker 对外 IP，自动显示检测到的公网 IP 和内网 IP。
-4. Worker 使用 host 还是 Docker runner。
+4. Worker 使用 host 还是 Docker runner；Docker 是否允许访问模型 API 和安装依赖。
 5. UFW 已启用时，是否放行 TCP 9443。
 
 #### Windows 本地电脑
@@ -159,8 +159,8 @@ curl -fsSL https://raw.githubusercontent.com/WSXYT/pi-cloud-computing/main/scrip
 以下命令均在 VPS 运行。稳定入口是编译后的 CLI：
 
 ```bash
-CLI=/root/.pi-cloud/source/dist/src/cli.js
-NODE=/usr/bin/node
+CLI="$HOME/.pi-cloud/source/dist/src/cli.js"
+NODE="$(command -v node)"
 ```
 
 查看状态：
@@ -168,7 +168,7 @@ NODE=/usr/bin/node
 ```bash
 $NODE $CLI worker status
 systemctl status pi-cloud-worker --no-pager
-curl -k https://127.0.0.1:9443/health
+$NODE $CLI worker health
 ```
 
 查看检测到的公网/内网 IP：
@@ -208,7 +208,7 @@ journalctl -u pi-cloud-worker -f
 
 ### 更新
 
-本地或 VPS 都可以重新运行同一条安装命令。安装器会更新 `~/.pi-cloud/source`、重新编译并保留现有连接、token、证书和配置。
+本地或 VPS 都可以重新运行同一条安装命令。源码只做 fast-forward 更新；遇到本地修改、分叉提交或非 Git 目录会停止，不会抹掉数据。现有连接、任务、token、证书和配置会保留；损坏的状态文件会报错而不是被清空。Worker 必须通过固定证书的本机健康检查，才会报告安装就绪。
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/WSXYT/pi-cloud-computing/main/scripts/install.sh | bash
@@ -232,7 +232,7 @@ irm https://raw.githubusercontent.com/WSXYT/pi-cloud-computing/main/scripts/inst
 systemctl is-active pi-cloud-worker
 ss -ltnp | grep 9443
 ufw allow 9443/tcp
-curl -k https://127.0.0.1:9443/health
+$NODE $CLI worker health
 ```
 
 还需要在云服务商安全组中放行 TCP 9443。
@@ -349,8 +349,8 @@ Git results are baseline-checked before application. Native session results are 
 ### Worker operations
 
 ```bash
-CLI=/root/.pi-cloud/source/dist/src/cli.js
-NODE=/usr/bin/node
+CLI="$HOME/.pi-cloud/source/dist/src/cli.js"
+NODE="$(command -v node)"
 
 $NODE $CLI worker status
 $NODE $CLI worker ips
@@ -384,4 +384,4 @@ npm run pack:smoke
 npm audit --omit=dev
 ```
 
-GitHub Actions runs the client suite on Ubuntu, Windows, and macOS, and builds both Worker Docker images on Linux.
+`pack:smoke` installs a real tarball in an isolated consumer, checks the CLI and deployment assets, and loads the extension through real Pi RPC. GitHub Actions verifies Ubuntu/Windows/macOS clients, real host and Docker tasks, Worker image startup, and non-root sudo/systemd installation and restart. Release procedure: [RELEASING.md](https://github.com/WSXYT/pi-cloud-computing/blob/main/RELEASING.md).

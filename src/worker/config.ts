@@ -1,4 +1,5 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
+import { writePrivateJson } from "../storage.js";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { isIP } from "node:net";
@@ -42,7 +43,7 @@ function envPublicIp(): string {
 
 function parseConfig(value: unknown, dataDir: string): WorkerConfig {
   if (typeof value !== "object" || value === null || Array.isArray(value))
-    return defaultWorkerConfig(dataDir);
+    throw new Error("invalid Worker configuration");
   const input = value as Record<string, unknown>;
   const port =
     typeof input.port === "number" &&
@@ -83,21 +84,17 @@ export async function loadWorkerConfig(
 ): Promise<WorkerConfig> {
   try {
     return parseConfig(
-      JSON.parse(await readFile(join(dataDir, "config.json"), "utf8")),
+      JSON.parse((await readFile(join(dataDir, "config.json"), "utf8")).replace(/^\uFEFF/, "")),
       dataDir,
     );
-  } catch {
-    return defaultWorkerConfig(dataDir);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return defaultWorkerConfig(dataDir);
+    throw error;
   }
 }
 
 export async function saveWorkerConfig(config: WorkerConfig): Promise<void> {
-  await mkdir(config.dataDir, { recursive: true, mode: 0o700 });
-  await writeFile(
-    join(config.dataDir, "config.json"),
-    `${JSON.stringify(config, null, 2)}\n`,
-    { mode: 0o600 },
-  );
+  await writePrivateJson(join(config.dataDir, "config.json"), config);
 }
 
 export function setWorkerConfigValue(
