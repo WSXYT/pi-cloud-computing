@@ -1,6 +1,7 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 
 import type { WorkerState, WorkerToken } from "./state.js";
+import { PiCloudError } from "../errors.js";
 
 const PAIRING_TTL_MS = 10 * 60 * 1000;
 
@@ -25,11 +26,11 @@ export function completePairing(
   now = Date.now(),
 ): string {
   if (!state.pairingCodeHash || !state.pairingExpiresAt)
-    throw new Error("pairing code is not active");
+    throw new PiCloudError("PAIRING_CODE_INVALID", "pairing code is not active");
   if (Date.parse(state.pairingExpiresAt) <= now) {
     delete state.pairingCodeHash;
     delete state.pairingExpiresAt;
-    throw new Error("pairing code expired");
+    throw new PiCloudError("PAIRING_CODE_EXPIRED", "pairing code expired");
   }
   const expected = Buffer.from(state.pairingCodeHash, "hex");
   const received = Buffer.from(hash(code), "hex");
@@ -37,7 +38,7 @@ export function completePairing(
     expected.length !== received.length ||
     !timingSafeEqual(expected, received)
   )
-    throw new Error("pairing code invalid");
+    throw new PiCloudError("PAIRING_CODE_INVALID", "pairing code invalid");
   delete state.pairingCodeHash;
   delete state.pairingExpiresAt;
   const token = randomBytes(32).toString("base64url");

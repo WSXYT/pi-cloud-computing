@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { visibleWidth } from "@earendil-works/pi-tui";
 
 import { selectSyncItems } from "../src/client-preflight.js";
 
@@ -36,6 +37,10 @@ test("preflight supports toggling multiple items and an explicit upload action",
             {},
             resolve,
           );
+          for (const width of [30, 80]) {
+            const lines = component.render(width);
+            assert.ok(lines.every((line) => visibleWidth(line) <= width));
+          }
           rendered = component.render(80).join("\n");
           component.handleInput?.(" ");
           component.handleInput?.("\u001b[B");
@@ -74,6 +79,7 @@ test("preflight supports toggling multiple items and an explicit upload action",
     ],
     {
       title: "Choose sync content",
+      summary: ["Local project: /work/project", "Independent copy; nothing uploaded yet"],
       required: "required",
       upload: "Upload selected",
       cancel: "Cancel",
@@ -85,4 +91,6 @@ test("preflight supports toggling multiple items and an explicit upload action",
   assert.deepEqual([...(selected ?? [])], ["git"]);
   assert.match(rendered, /Upload selected/);
   assert.match(rendered, /Cancel/);
+  assert.match(rendered, /Local project: \/work\/project/);
+  assert.match(rendered, /nothing uploaded yet/);
 });

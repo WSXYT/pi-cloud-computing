@@ -1,5 +1,9 @@
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
-import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile } from "node:fs/promises";
+import { sha256 } from "../environment.js";
+import { validateIdentifier } from "../paths.js";
+import { writePrivateFile, writePrivateJson } from "../storage.js";
+import { withWorkerStateLock } from "./state.js";
 import { join } from "node:path";
 
 interface EncryptedSecret {
@@ -8,6 +12,7 @@ interface EncryptedSecret {
   nonce: string;
   ciphertext: string;
   authTag: string;
+  sha256?: string;
   createdAt: string;
   revokedAt?: string;
 }
@@ -24,51 +29,47 @@ async function readOrCreateKey(dataDir: string): Promise<Buffer> {
   try {
     const key = await readFile(path);
     if (key.length !== 32) throw new Error("invalid secret master key");
-    return key;
-  } catch (error) {
-    if (error instanceof Error && error.message === "invalid secret master key")
-      throw error;
-    const key = randomBytes(32);
-    await writeFile(path, key, { mode: 0o600, flag: "wx" });
     await chmod(path, 0o600);
     return key;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    const key = randomBytes(32);
+    try { await writePrivateFile(path, key, true); return key; }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      return readOrCreateKey(dataDir);
+    }
   }
 }
 
 async function readSecretFile(dataDir: string): Promise<SecretFile> {
+  let text: string;
+  try { text = await readFile(join(dataDir, "secrets.json"), "utf8"); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return { secrets: [] }; throw error; }
   try {
-    const parsed: unknown = JSON.parse(
-      await readFile(join(dataDir, "secrets.json"), "utf8"),
-    );
-    if (
-      typeof parsed !== "object" ||
-      parsed === null ||
-      !Array.isArray((parsed as Record<string, unknown>).secrets)
-    )
-      throw new Error("invalid secret file");
-    return parsed as SecretFile;
-  } catch (error) {
-    if (error instanceof Error && error.message === "invalid secret file")
-      throw error;
-    return { secrets: [] };
-  }
+    const file = JSON.parse(text.replace(/^\uFEFF/, "")) as SecretFile;
+    if (!file || !Array.isArray(file.secrets)) throw new Error("invalid secret file");
+    for (const record of file.secrets) {
+      validateIdentifier(record?.id);
+      if (!Number.isSafeInteger(record.version) || record.version < 1 || typeof record.nonce !== "string" ||
+          typeof record.ciphertext !== "string" || typeof record.authTag !== "string" || typeof record.createdAt !== "string" ||
+          (record.revokedAt !== undefined && typeof record.revokedAt !== "string")) throw new Error("invalid secret record");
+    }
+    return file;
+  } catch { throw new Error("invalid secret file; encrypted records were preserved"); }
 }
 
 async function writeSecretFile(
   dataDir: string,
   file: SecretFile,
 ): Promise<void> {
-  await mkdir(dataDir, { recursive: true, mode: 0o700 });
-  await writeFile(
-    join(dataDir, "secrets.json"),
-    `${JSON.stringify(file, null, 2)}\n`,
-    { mode: 0o600 },
-  );
+  await writePrivateJson(join(dataDir, "secrets.json"), file);
 }
 
 export interface SecretMetadata {
   id: string;
   version: number;
+  sha256?: string;
   createdAt: string;
   revokedAt?: string;
 }
@@ -88,8 +89,10 @@ export class SecretStore {
     version: number,
     value: string,
   ): Promise<SecretMetadata> {
-    if (!id || !Number.isInteger(version) || version < 1)
+    validateIdentifier(id);
+    if (!Number.isSafeInteger(version) || version < 1)
       throw new Error("secret id and version are required");
+    const digest = sha256(value);
     const nonce = randomBytes(12);
     const cipher = createCipheriv(ALGORITHM, this.key, nonce);
     cipher.setAAD(Buffer.from(`${id}\0${version}`));
@@ -103,15 +106,20 @@ export class SecretStore {
       nonce: nonce.toString("base64url"),
       ciphertext: ciphertext.toString("base64url"),
       authTag: cipher.getAuthTag().toString("base64url"),
+      sha256: digest,
       createdAt: new Date().toISOString(),
     };
-    const file = await readSecretFile(this.dataDir);
-    file.secrets = file.secrets.filter(
-      (item) => item.id !== id || item.revokedAt,
-    );
-    file.secrets.push(record);
-    await writeSecretFile(this.dataDir, file);
-    return { id, version, createdAt: record.createdAt };
+    return withWorkerStateLock(this.dataDir, async () => {
+      const file = await readSecretFile(this.dataDir);
+      const previous = file.secrets.findLast((item) => item.id === id);
+      if (previous && version === previous.version && !previous.revokedAt && previous.sha256 === digest)
+        return { id, version, sha256: digest, createdAt: previous.createdAt };
+      if (previous && version <= previous.version) throw new Error("secret version conflict; reload the current metadata");
+      file.secrets = file.secrets.filter((item) => item.id !== id || item.revokedAt);
+      file.secrets.push(record);
+      await writeSecretFile(this.dataDir, file);
+      return { id, version, sha256: digest, createdAt: record.createdAt };
+    });
   }
 
   async get(id: string, version?: number): Promise<string | null> {
@@ -132,37 +140,35 @@ export class SecretStore {
     );
     decipher.setAAD(Buffer.from(`${record.id}\0${record.version}`));
     decipher.setAuthTag(Buffer.from(record.authTag, "base64url"));
-    return Buffer.concat([
+    const value = Buffer.concat([
       decipher.update(Buffer.from(record.ciphertext, "base64url")),
       decipher.final(),
     ]).toString("utf8");
+    if (record.sha256 && sha256(value) !== record.sha256) throw new Error("secret fingerprint mismatch");
+    return value;
   }
 
-  async list(): Promise<SecretMetadata[]> {
+  async list(includeRevoked = false): Promise<SecretMetadata[]> {
     const file = await readSecretFile(this.dataDir);
     return file.secrets
-      .filter((item) => !item.revokedAt)
-      .map(({ id, version, createdAt, revokedAt }) => ({
+      .filter((item) => includeRevoked || !item.revokedAt)
+      .map(({ id, version, sha256, createdAt, revokedAt }) => ({
         id,
         version,
+        ...(sha256 ? { sha256 } : {}),
         createdAt,
         ...(revokedAt ? { revokedAt } : {}),
       }));
   }
 
   async revoke(id: string, version?: number): Promise<boolean> {
-    const file = await readSecretFile(this.dataDir);
-    const record = [...file.secrets]
-      .reverse()
-      .find(
-        (item) =>
-          item.id === id &&
-          !item.revokedAt &&
-          (version === undefined || item.version === version),
-      );
-    if (!record) return false;
-    record.revokedAt = new Date().toISOString();
-    await writeSecretFile(this.dataDir, file);
-    return true;
+    return withWorkerStateLock(this.dataDir, async () => {
+      const file = await readSecretFile(this.dataDir);
+      const records = file.secrets.filter((item) => item.id === id && !item.revokedAt && (version === undefined || item.version === version));
+      if (!records.length) return false;
+      for (const record of records) record.revokedAt = new Date().toISOString();
+      await writeSecretFile(this.dataDir, file);
+      return true;
+    });
   }
 }

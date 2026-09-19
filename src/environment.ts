@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFile, readdir, stat } from "node:fs/promises";
-import { basename, join, relative, resolve, sep } from "node:path";
+import { join, relative, resolve, sep } from "node:path";
+import { validateRelativePath } from "./paths.js";
 
 import type { EnvironmentManifest } from "./protocol.js";
 
@@ -56,7 +57,7 @@ async function fileHash(path: string): Promise<string> {
   return sha256(await readFile(path));
 }
 
-async function walkFiles(
+export async function walkFiles(
   root: string,
   includeHidden = false,
 ): Promise<string[]> {
@@ -65,8 +66,17 @@ async function walkFiles(
     const files: string[] = [];
     for (const entry of entries) {
       if (
-        entry.name === "node_modules" ||
-        entry.name === "sessions" ||
+        [
+          "node_modules",
+          "sessions",
+          "npm",
+          "git",
+          ".git",
+          "cache",
+          "subagent-artifacts",
+        ].includes(entry.name) ||
+        entry.name.endsWith(".jsonl") ||
+        entry.name.startsWith("cloud-merged-") ||
         (!includeHidden && entry.name.startsWith("."))
       )
         continue;
@@ -76,8 +86,9 @@ async function walkFiles(
       else if (entry.isFile()) files.push(path);
     }
     return files;
-  } catch {
-    return [];
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
   }
 }
 
@@ -164,15 +175,25 @@ export async function buildEnvironmentManifest(
     warnings.push(...compatibilityWarnings(path, platform));
   }
 
-  const providers = Object.entries(models).map(([id, value]) => ({
+  const providerMap =
+    models.providers &&
+    typeof models.providers === "object" &&
+    !Array.isArray(models.providers)
+      ? (models.providers as Record<string, unknown>)
+      : {};
+  const providers = Object.entries(providerMap).map(([id, value]) => ({
     id,
     models:
+      value &&
       typeof value === "object" &&
-      value !== null &&
-      !Array.isArray(value) &&
       Array.isArray((value as Record<string, unknown>).models)
-        ? ((value as Record<string, unknown>).models as unknown[]).filter(
-            (model): model is string => typeof model === "string",
+        ? (value as { models: unknown[] }).models.flatMap((model) =>
+            model &&
+            typeof model === "object" &&
+            "id" in model &&
+            typeof model.id === "string"
+              ? [model.id]
+              : [],
           )
         : [],
     configSha256: sha256(JSON.stringify(value)),
@@ -225,9 +246,10 @@ export function resourceAbsolutePath(
   cwd: string,
   manifestPath: string,
 ): string {
+  validateRelativePath(manifestPath);
   if (manifestPath.startsWith("global/"))
     return resolve(agentDir, manifestPath.slice("global/".length));
   if (manifestPath.startsWith("project/"))
     return resolve(cwd, manifestPath.slice("project/".length));
-  return resolve(cwd, basename(manifestPath));
+  throw new Error("invalid environment resource scope");
 }

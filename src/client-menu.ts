@@ -23,7 +23,7 @@ export async function selectCloudMenu(
   if (ctx.mode !== "tui") {
     if (!ctx.hasUI) return null;
     const selected = await ctx.ui.select(
-      title,
+      [title, ...status].join("\n"),
       items.map((item) => item.label),
     );
     return items.find((item) => item.label === selected)?.value ?? null;

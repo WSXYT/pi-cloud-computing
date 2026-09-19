@@ -1,4 +1,4 @@
-param(
+﻿param(
   [ValidateSet('zh-CN', 'en')][string]$Language,
   [ValidateSet('client', 'worker-guide')][string]$Role,
   [string]$Repo = $(if ($env:PI_CLOUD_REPO) { $env:PI_CLOUD_REPO } else { 'WSXYT/pi-cloud-computing' })
@@ -46,6 +46,7 @@ if ($major -ne '24') {
     throw 'Node.js 24 is required. Install Node.js 24 and run this installer again.'
   }
   winget install --id OpenJS.NodeJS.LTS --exact --accept-package-agreements --accept-source-agreements
+  if ($LASTEXITCODE -ne 0) { throw 'Node.js installation did not complete. Follow winget instructions and rerun the installer.' }
   Refresh-Path
   $node = Get-Command node -ErrorAction Stop
   $major = & $node.Source -p 'process.versions.node.split(".")[0]'
@@ -57,12 +58,14 @@ Write-Host "Node $(& $node.Source --version) · npm $(& $npm --version)"
 if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
   if (-not (Get-Command winget -ErrorAction SilentlyContinue)) { throw 'Git is required.' }
   winget install --id Git.Git --exact --accept-package-agreements --accept-source-agreements
+  if ($LASTEXITCODE -ne 0) { throw 'Git installation did not complete. Follow winget instructions and rerun the installer.' }
   Refresh-Path
 }
 
 $pi = Get-Command pi -ErrorAction SilentlyContinue
 if (-not $pi) {
-  & $npm install --global '@earendil-works/pi-coding-agent@0.84.2' --ignore-scripts
+  & $npm install --global '@earendil-works/pi-coding-agent@0.85.1' --ignore-scripts
+  if ($LASTEXITCODE -ne 0) { throw 'Pi installation failed.' }
   Refresh-Path
   $pi = Get-Command pi -ErrorAction Stop
   if ($Language -eq 'zh-CN') { Write-Host "已安装 Pi：$($pi.Source)" } else { Write-Host "Installed Pi: $($pi.Source)" }
@@ -72,29 +75,34 @@ if (-not $pi) {
 
 $source = if ($env:PI_CLOUD_SOURCE_DIR) { $env:PI_CLOUD_SOURCE_DIR } else { Join-Path $HOME '.pi-cloud\source' }
 if (Test-Path (Join-Path $source '.git')) {
-  git -C $source fetch --depth 1 origin main
-  git -C $source reset --hard origin/main
+  $dirty = git -C $source status --porcelain
+  if ($LASTEXITCODE -ne 0) { throw "Could not inspect source directory: $source" }
+  if ($dirty) { throw "Source directory has local changes: $source. Move it or set PI_CLOUD_SOURCE_DIR to a clean path; the installer will not discard your changes." }
+  git -C $source fetch origin main
+  if ($LASTEXITCODE -ne 0) { throw "git fetch failed" }
+  git -C $source merge --ff-only FETCH_HEAD
+  if ($LASTEXITCODE -ne 0) { throw 'Source update is not a fast-forward. Local commits were preserved; use a separate PI_CLOUD_SOURCE_DIR.' }
 } else {
-  if (Test-Path $source) { Remove-Item -Recurse -Force $source }
+  if (Test-Path $source) { throw "Source directory exists but is not a Git checkout: $source. Move it or set PI_CLOUD_SOURCE_DIR to a clean path, then run the installer again." }
   New-Item -ItemType Directory -Force (Split-Path $source) | Out-Null
   git clone --depth 1 "https://github.com/$Repo.git" $source
+  if ($LASTEXITCODE -ne 0) { throw "git clone failed" }
 }
 Push-Location $source
 try {
   & $npm ci --ignore-scripts
+  if ($LASTEXITCODE -ne 0) { throw 'npm ci failed.' }
   & $npm run build
+  if ($LASTEXITCODE -ne 0) { throw 'npm build failed.' }
 } finally {
   Pop-Location
 }
 
 & $pi.Source install $source
-$agentDir = if ($env:PI_CODING_AGENT_DIR) { $env:PI_CODING_AGENT_DIR } else { Join-Path $HOME '.pi\agent' }
-$statePath = Join-Path $agentDir 'pi-cloud.json'
-$state = if (Test-Path $statePath) { Get-Content -Raw $statePath | ConvertFrom-Json } else { [pscustomobject]@{ connections = @() } }
-if (-not $state.PSObject.Properties['connections']) { $state | Add-Member -NotePropertyName connections -NotePropertyValue @() }
-if ($state.PSObject.Properties['locale']) { $state.locale = $Language } else { $state | Add-Member -NotePropertyName locale -NotePropertyValue $Language }
-New-Item -ItemType Directory -Force $agentDir | Out-Null
-$state | ConvertTo-Json -Depth 10 | Set-Content -Encoding utf8 $statePath
+if ($LASTEXITCODE -ne 0) { throw 'Pi extension installation failed.' }
+# Share the extension's locked, atomic update; preserve tokens/tasks and reject corrupt state.
+& $node.Source (Join-Path $source 'dist\src\cli.js') client language $Language
+if ($LASTEXITCODE -ne 0) { throw 'Client language could not be saved. Existing recovery state was preserved.' }
 
 Write-Host ''
 if ($Language -eq 'zh-CN') {

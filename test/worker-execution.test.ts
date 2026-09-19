@@ -12,6 +12,8 @@ import {
   serializeWorkspaceArchive,
 } from "../src/git.js";
 import type { TaskSpec } from "../src/protocol.js";
+import { sha256 } from "../src/environment.js";
+import { parseSessionArchive } from "../src/session.js";
 import { ArtifactStore } from "../src/worker/artifacts.js";
 import {
   cleanupPreparedTask,
@@ -60,7 +62,7 @@ test("prepares an uploaded repository and returns its remote changes", async () 
       sessionId: "new",
       baseLeafId: null,
       lastEntryId: null,
-      entriesSha256: "empty",
+      entriesSha256: sha256(""),
     },
     artifacts: [{ ...descriptor, kind: "workspace" }],
     secretIds: ["pi-auth"],
@@ -93,8 +95,46 @@ test("prepares an uploaded repository and returns its remote changes", async () 
     result.files.map((file) => file.path),
     ["file.txt"],
   );
+  assert.ok(
+    payload.sessionArtifactId,
+    "deselecting history must still create a real fresh remote session",
+  );
+  const session = parseSessionArchive(
+    (await store.read(String(payload.sessionArtifactId))).toString("utf8"),
+  );
+  assert.equal(session.header.id, "new");
+  assert.deepEqual(session.entries, []);
   await cleanupPreparedTask(prepared);
   await assert.rejects(() =>
     readFile(join(prepared.runtimeAgentDir ?? "", "auth.json")),
+  );
+  const invalidSession = await store.put(
+    "bad-session",
+    Buffer.from("not-json"),
+    "application/jsonl",
+  );
+  const invalidRecord: TaskRecord = {
+    ...record,
+    task: {
+      ...task,
+      taskId: "invalid-session-task",
+      artifacts: [...task.artifacts, { ...invalidSession, kind: "session" }],
+    },
+  };
+  await assert.rejects(
+    () => prepareTask(dataDir, store, secrets, invalidRecord),
+    /invalid JSON/,
+  );
+  await assert.rejects(() =>
+    readFile(
+      join(
+        dataDir,
+        "tasks",
+        "invalid-session-task",
+        "runtime",
+        "agent",
+        "auth.json",
+      ),
+    ),
   );
 });

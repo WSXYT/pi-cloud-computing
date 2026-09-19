@@ -13,6 +13,7 @@ export interface WorkerConfig {
   port: number;
   locale: Locale;
   runner: RunnerMode;
+  dockerNetwork: "none" | "bridge";
   retention: "until-delete" | "days";
   retentionDays?: number;
 }
@@ -29,6 +30,8 @@ export function defaultWorkerConfig(dataDir = defaultDataDir()): WorkerConfig {
     port: 9443,
     locale: detectLocale(),
     runner: process.env.PI_CLOUD_RUNNER === "host" ? "host" : "docker",
+    dockerNetwork:
+      process.env.PI_CLOUD_DOCKER_NETWORK === "bridge" ? "bridge" : "none",
     retention: "until-delete",
   };
 }
@@ -69,6 +72,7 @@ function parseConfig(value: unknown, dataDir: string): WorkerConfig {
       typeof input.locale === "string" ? input.locale : undefined,
     ),
     runner,
+    dockerNetwork: input.dockerNetwork === "bridge" ? "bridge" : "none",
     retention,
     ...(retentionDays === undefined ? {} : { retentionDays }),
   };
@@ -118,6 +122,11 @@ export function setWorkerConfigValue(
     if (value !== "docker" && value !== "host")
       throw new Error("runner must be docker or host");
     return { ...config, runner: value };
+  }
+  if (key === "docker-network") {
+    if (value !== "none" && value !== "bridge")
+      throw new Error("docker-network must be none or bridge");
+    return { ...config, dockerNetwork: value };
   }
   if (key === "retention") {
     if (value !== "until-delete" && value !== "days")

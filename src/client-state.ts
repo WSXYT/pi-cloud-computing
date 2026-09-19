@@ -1,8 +1,9 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-import type { Locale, TaskStatus } from "./protocol.js";
+import type { GitBaseline, Locale, SessionCursor, TaskInput, TaskSpec, TaskStatus } from "./protocol.js";
+import { withPrivateFileLock, writePrivateJson } from "./storage.js";
 
 export interface CloudConnectionState {
   baseUrl: string;
@@ -28,6 +29,18 @@ export interface CloudTaskState {
   artifactId?: string;
   sessionArtifactId?: string;
   updatedAt: string;
+  sessionPath?: string;
+  remoteSession?: SessionCursor;
+  git?: GitBaseline;
+  appliedGit?: GitBaseline;
+  mergedSessionId?: string;
+  spec?: TaskSpec;
+  readyToSubmit?: boolean;
+  accepted?: boolean;
+  finalizing?: boolean;
+  pendingAbort?: boolean;
+  pendingInputs?: TaskInput[];
+  error?: string;
 }
 
 export interface CloudClientState {
@@ -70,7 +83,8 @@ function isTask(value: unknown): value is CloudTaskState {
     Number.isInteger(item.cursor) &&
     item.cursor >= 0 &&
     (item.artifactId === undefined || isString(item.artifactId)) &&
-    (item.sessionArtifactId === undefined || isString(item.sessionArtifactId)) &&
+    (item.sessionArtifactId === undefined ||
+      isString(item.sessionArtifactId)) &&
     ["queued", "running", "completed", "failed", "aborted"].includes(
       String(item.status),
     )
@@ -91,16 +105,14 @@ export async function loadClientState(
   path = clientStatePath(),
 ): Promise<CloudClientState> {
   try {
-    const parsed: unknown = JSON.parse(await readFile(path, "utf8"));
+    const parsed: unknown = JSON.parse((await readFile(path, "utf8")).replace(/^\uFEFF/, ""));
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
       throw new Error("invalid client state");
     const value = parsed as Partial<CloudClientState>;
     if (!Array.isArray(value.connections))
       throw new Error("invalid client state");
     const connections = value.connections.filter(isConnection);
-    const tasks = Array.isArray(value.tasks)
-      ? value.tasks.filter(isTask)
-      : [];
+    const tasks = Array.isArray(value.tasks) ? value.tasks.filter(isTask) : [];
     const result: CloudClientState = {
       connections,
       ...(tasks.length > 0 ? { tasks } : {}),
@@ -110,8 +122,9 @@ export async function loadClientState(
     if (typeof value.activeWorkerId === "string")
       result.activeWorkerId = value.activeWorkerId;
     return result;
-  } catch {
-    return { connections: [] };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { connections: [] };
+    throw new Error(`Could not read Pi Cloud state; original data was preserved: ${path}`, { cause: error });
   }
 }
 
@@ -119,10 +132,13 @@ export async function saveClientState(
   state: CloudClientState,
   path = clientStatePath(),
 ): Promise<void> {
-  await mkdir(join(path, ".."), { recursive: true, mode: 0o700 });
-  const temporary = `${path}.tmp`;
-  await writeFile(temporary, `${JSON.stringify(state, null, 2)}\n`, {
-    mode: 0o600,
+  await writePrivateJson(path, state);
+}
+
+export async function updateClientState(update: (state: CloudClientState) => CloudClientState, path = clientStatePath()): Promise<CloudClientState> {
+  return withPrivateFileLock(path, async () => {
+    const state = update(await loadClientState(path));
+    await saveClientState(state, path);
+    return state;
   });
-  await rename(temporary, path);
 }

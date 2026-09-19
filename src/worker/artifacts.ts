@@ -1,9 +1,11 @@
 import { createReadStream } from "node:fs";
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { link, lstat, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { sha256 } from "../environment.js";
 import type { ArtifactDescriptor } from "../protocol.js";
+import { validateIdentifier } from "../paths.js";
 
 export const MAX_ARTIFACT_BYTES = 50 * 1024 * 1024;
 
@@ -21,7 +23,7 @@ export class ArtifactStore {
     data: Uint8Array,
     contentType = "application/octet-stream",
   ): Promise<ArtifactDescriptor> {
-    if (!/^[A-Za-z0-9._-]+$/.test(id)) throw new Error("invalid artifact id");
+    validateIdentifier(id);
     if (data.byteLength > MAX_ARTIFACT_BYTES)
       throw new Error("artifact exceeds size limit");
     const path = join(this.root, id);
@@ -32,24 +34,25 @@ export class ArtifactStore {
       sha256: sha256(data),
       contentType,
     };
-    await writeFile(path, data, { mode: 0o600, flag: "wx" }).catch(
-      async (error: unknown) => {
+    const temporary = `${path}.${randomUUID()}.tmp`;
+    try {
+      await writeFile(temporary, data, { mode: 0o600, flag: "wx" });
+      try {
+        await link(temporary, path);
+      } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
         const existing = await this.describe(id);
         if (existing.sha256 !== descriptor.sha256)
           throw new Error("artifact id already exists with different content");
-      },
-    );
+      }
+    } finally {
+      await rm(temporary, { force: true });
+    }
     return descriptor;
   }
 
   async describe(id: string): Promise<ArtifactDescriptor> {
-    const path = join(this.root, id);
-    if (!/^[A-Za-z0-9._-]+$/.test(id)) throw new Error("invalid artifact id");
-    const info = await stat(path);
-    if (info.size > MAX_ARTIFACT_BYTES)
-      throw new Error("artifact exceeds size limit");
-    const content = await readFile(path);
+    const content = await this.read(id);
     return {
       id,
       kind: "result",
@@ -60,12 +63,27 @@ export class ArtifactStore {
   }
 
   async read(id: string): Promise<Buffer> {
-    if (!/^[A-Za-z0-9._-]+$/.test(id)) throw new Error("invalid artifact id");
-    return readFile(join(this.root, id));
+    validateIdentifier(id);
+    const path = join(this.root, id);
+    const info = await lstat(path);
+    if (
+      !info.isFile() ||
+      info.isSymbolicLink() ||
+      info.size > MAX_ARTIFACT_BYTES
+    )
+      throw new Error("invalid artifact file or size");
+    return readFile(path);
+  }
+
+  async readVerified(descriptor: ArtifactDescriptor): Promise<Buffer> {
+    const bytes = await this.read(descriptor.id);
+    if (bytes.length !== descriptor.size || sha256(bytes) !== descriptor.sha256)
+      throw new Error("ARTIFACT_HASH_MISMATCH");
+    return bytes;
   }
 
   stream(id: string): NodeJS.ReadableStream {
-    if (!/^[A-Za-z0-9._-]+$/.test(id)) throw new Error("invalid artifact id");
+    validateIdentifier(id);
     return createReadStream(join(this.root, id));
   }
 }

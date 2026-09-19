@@ -6,6 +6,7 @@ ROLE=""
 LANGUAGE=""
 IP=""
 RUNNER=""
+DOCKER_NETWORK=""
 ASSUME_YES=0
 
 while [ "$#" -gt 0 ]; do
@@ -25,6 +26,10 @@ while [ "$#" -gt 0 ]; do
     shift
     RUNNER="${1:-}"
     ;;
+  --docker-network)
+    shift
+    DOCKER_NETWORK="${1:-}"
+    ;;
   --repo)
     shift
     REPO="${1:-}"
@@ -38,6 +43,7 @@ while [ "$#" -gt 0 ]; do
       '  --both --ip ADDRESS      Install both roles' \
       '  --lang zh-CN|en          Set interface language' \
       '  --runner host|docker     Set Worker isolation mode' \
+      '  --docker-network none|bridge  Explicit Docker egress policy' \
       'Without role/language arguments, the installer asks interactively.'
     exit 0
     ;;
@@ -77,6 +83,21 @@ if [ -z "$ROLE" ]; then
     role_choice="$(ask $'What do you want to install?\n  1) Local computer: Pi extension\n  2) Linux VPS: cloud Worker\n  3) Both\n> ' 1)"
   fi
   case "$role_choice" in 2) ROLE="worker" ;; 3) ROLE="both" ;; *) ROLE="client" ;; esac
+fi
+
+if [ "$ROLE" = "worker" ] || [ "$ROLE" = "both" ]; then
+  if [ "$(uname -s)" != "Linux" ] || ! command -v systemctl >/dev/null 2>&1; then
+    printf '%s\n' 'The Worker requires Linux with systemd. Install only the client on this computer.' >&2
+    exit 1
+  fi
+fi
+if [ -n "$DOCKER_NETWORK" ] && [ "$DOCKER_NETWORK" != "none" ] && [ "$DOCKER_NETWORK" != "bridge" ]; then
+  printf '%s\n' 'Docker network must be none or bridge.' >&2
+  exit 2
+fi
+if [ "$RUNNER" = "docker" ] && [ "$ASSUME_YES" -eq 1 ] && [ -z "$DOCKER_NETWORK" ]; then
+  printf '%s\n' 'Noninteractive Docker installation requires --docker-network bridge (model API access) or none (offline only).' >&2
+  exit 2
 fi
 
 if [ "$(id -u)" -eq 0 ]; then SUDO=""; else SUDO="sudo"; fi
@@ -120,17 +141,24 @@ if ! command -v git >/dev/null 2>&1; then
   fi
 fi
 
+GLOBAL_PREFIX="$("$NPM_BIN" prefix --global)"
+install_pi() {
+  if [ -w "$GLOBAL_PREFIX" ] || [ -z "$SUDO" ]; then
+    "$NPM_BIN" install --global --prefix "$GLOBAL_PREFIX" '@earendil-works/pi-coding-agent@0.85.1' --ignore-scripts
+  else
+    "$SUDO" env "PATH=$PATH" "$NPM_BIN" install --global --prefix "$GLOBAL_PREFIX" '@earendil-works/pi-coding-agent@0.85.1' --ignore-scripts
+  fi
+  hash -r
+}
+export PATH="$GLOBAL_PREFIX/bin:$PATH"
 PI_BIN="$(command -v pi 2>/dev/null || true)"
 if [ "$ROLE" = "worker" ] || [ "$ROLE" = "both" ]; then
-  SYSTEM_PI="$(dirname "$NODE_BIN")/pi"
-  if [ ! -x "$SYSTEM_PI" ]; then
-    "$NPM_BIN" install --global '@earendil-works/pi-coding-agent@0.84.2' --ignore-scripts
-  fi
+  SYSTEM_PI="$GLOBAL_PREFIX/bin/pi"
+  if [ ! -x "$SYSTEM_PI" ]; then install_pi; fi
   PI_BIN="$SYSTEM_PI"
   if [ "$LANGUAGE" = "zh-CN" ]; then printf 'Worker 使用系统 Pi：%s\n' "$PI_BIN"; else printf 'Worker will use system Pi: %s\n' "$PI_BIN"; fi
 elif [ -z "$PI_BIN" ]; then
-  "$NPM_BIN" install --global '@earendil-works/pi-coding-agent@0.84.2' --ignore-scripts
-  hash -r
+  install_pi
   PI_BIN="$(command -v pi)"
   if [ "$LANGUAGE" = "zh-CN" ]; then printf '已安装 Pi：%s\n' "$PI_BIN"; else printf 'Installed Pi: %s\n' "$PI_BIN"; fi
 else
@@ -139,10 +167,18 @@ fi
 
 SOURCE_DIR="${PI_CLOUD_SOURCE_DIR:-${PI_CLOUD_DATA_DIR:-$HOME/.pi-cloud}/source}"
 if [ -d "$SOURCE_DIR/.git" ]; then
-  git -C "$SOURCE_DIR" fetch --depth 1 origin main
-  git -C "$SOURCE_DIR" reset --hard origin/main
+  source_status="$(git -C "$SOURCE_DIR" status --porcelain)"
+  if [ -n "$source_status" ]; then
+    printf '%s\n' "Source directory has local changes: $SOURCE_DIR" 'Move it or set PI_CLOUD_SOURCE_DIR to a clean path; the installer will not discard your changes.' >&2
+    exit 1
+  fi
+  git -C "$SOURCE_DIR" fetch origin main
+  git -C "$SOURCE_DIR" merge --ff-only FETCH_HEAD
 else
-  rm -rf "$SOURCE_DIR"
+  if [ -e "$SOURCE_DIR" ]; then
+    printf '%s\n' "Source directory exists but is not a Git checkout: $SOURCE_DIR" 'Move it or set PI_CLOUD_SOURCE_DIR to a clean path, then run the installer again.' >&2
+    exit 1
+  fi
   mkdir -p "$(dirname "$SOURCE_DIR")"
   git clone --depth 1 "https://github.com/$REPO.git" "$SOURCE_DIR"
 fi
@@ -152,18 +188,10 @@ fi
   "$NPM_BIN" run build
 )
 
+CLI="$SOURCE_DIR/dist/src/cli.js"
 configure_client_language() {
-  local state_path="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/pi-cloud.json"
-  PI_CLOUD_STATE_PATH="$state_path" PI_CLOUD_LOCALE="$LANGUAGE" "$NODE_BIN" <<'NODE'
-const fs = require('node:fs');
-const path = process.env.PI_CLOUD_STATE_PATH;
-let state = { connections: [] };
-try { state = JSON.parse(fs.readFileSync(path, 'utf8')); } catch {}
-state.locale = process.env.PI_CLOUD_LOCALE;
-state.connections ??= [];
-fs.mkdirSync(require('node:path').dirname(path), { recursive: true, mode: 0o700 });
-fs.writeFileSync(path, JSON.stringify(state, null, 2) + '\n', { mode: 0o600 });
-NODE
+  # Use the same BOM-tolerant, locked, atomic state update as the extension.
+  "$NODE_BIN" "$CLI" client language "$LANGUAGE"
 }
 
 if [ "$ROLE" = "client" ] || [ "$ROLE" = "both" ]; then
@@ -210,11 +238,24 @@ if [ "$RUNNER" != "host" ] && [ "$RUNNER" != "docker" ]; then
   exit 2
 fi
 
-CLI="$SOURCE_DIR/dist/src/cli.js"
 "$NODE_BIN" "$CLI" config set language "$LANGUAGE"
 "$NODE_BIN" "$CLI" config set runner "$RUNNER"
 if [ "$RUNNER" = "docker" ]; then
-  docker build -f "$SOURCE_DIR/deploy/runner.Dockerfile" -t pi-cloud-worker:latest "$SOURCE_DIR"
+  if [ -z "$DOCKER_NETWORK" ]; then
+    if [ "$LANGUAGE" = "zh-CN" ]; then
+      network_choice="$(ask '允许 Docker 访问网络以调用模型 API 和安装依赖？[y/N]：' n)"
+    else
+      network_choice="$(ask 'Allow Docker network access for model APIs and dependencies? [y/N]: ' n)"
+    fi
+    case "$network_choice" in y | Y | yes | YES) DOCKER_NETWORK="bridge" ;; *) DOCKER_NETWORK="none" ;; esac
+  fi
+  "$NODE_BIN" "$CLI" config set docker-network "$DOCKER_NETWORK"
+  if [ "$DOCKER_NETWORK" = "none" ]; then printf '%s\n' 'Docker is offline: cloud model API access is disabled until you explicitly enable bridge networking.'; fi
+  if docker info >/dev/null 2>&1; then
+    docker build -f "$SOURCE_DIR/deploy/runner.Dockerfile" -t pi-cloud-worker:latest "$SOURCE_DIR"
+  else
+    $SUDO docker build -f "$SOURCE_DIR/deploy/runner.Dockerfile" -t pi-cloud-worker:latest "$SOURCE_DIR"
+  fi
 fi
 INSTALL_OUTPUT="$("$NODE_BIN" "$CLI" worker install --ip "$IP" --systemd)"
 DATA_DIR="${PI_CLOUD_DATA_DIR:-$HOME/.pi-cloud}"
@@ -229,10 +270,18 @@ if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q '^Status: 
   case "$open_firewall" in n | N | no | NO) ;; *) $SUDO ufw allow 9443/tcp ;; esac
 fi
 
+health="FAILED"
+for attempt in 1 2 3 4 5; do
+  if "$NODE_BIN" "$CLI" worker health >/dev/null 2>&1; then health="OK"; break; fi
+  if [ "$attempt" -lt 5 ]; then sleep 1; fi
+done
+if [ "$health" != "OK" ]; then
+  printf '%s\n' 'Worker health check failed. Check: journalctl -u pi-cloud-worker -n 50 --no-pager. Installation is not ready for pairing.' >&2
+  exit 1
+fi
 printf '%s\n' "$INSTALL_OUTPUT"
 pair_command="$(printf '%s\n' "$INSTALL_OUTPUT" | sed -n 's/^pair-command=//p')"
 printf '\n%s\n%s\n' '============================================================' "$pair_command"
-if curl -kfsS --max-time 5 "https://127.0.0.1:9443/health" >/dev/null; then health="OK"; else health="FAILED"; fi
 if [ "$LANGUAGE" = "zh-CN" ]; then
   printf '%s\n' '============================================================' "Worker 已启动，本机健康检查：${health}" '把上面的 /cloud-pair 整行复制到本地 Pi，然后输入 /cloud。'
 else

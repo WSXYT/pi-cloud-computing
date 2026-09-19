@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, rename, writeFile } from "node:fs/promises";
+import { link, mkdir, rm, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
 import type {
@@ -135,14 +135,26 @@ export function isTemporaryCloudEntry(entry: SessionEntry): boolean {
 function durableEntries(entries: SessionEntry[]): SessionEntry[] {
   const durable: SessionEntry[] = [];
   const nearestDurable = new Map<string, string | null>();
+  let model: string | undefined;
+  let thinking: string | undefined;
   for (const entry of entries) {
-    if (isTemporaryCloudEntry(entry)) {
-      nearestDurable.set(entry.id, durable.at(-1)?.id ?? null);
-      continue;
+    let redundant = false;
+    if (entry.type === "model_change") {
+      const next = JSON.stringify([entry.provider, entry.modelId]);
+      redundant = model === next;
+      model = next;
+    } else if (entry.type === "thinking_level_change") {
+      redundant = thinking === entry.thinkingLevel;
+      thinking = entry.thinkingLevel;
     }
     let parentId = entry.parentId;
     while (parentId && nearestDurable.has(parentId))
       parentId = nearestDurable.get(parentId) ?? null;
+    // Pi can append unchanged model/thinking settings on resume. Ignore only these no-ops, never actual setting or conversation changes.
+    if (isTemporaryCloudEntry(entry) || redundant) {
+      nearestDurable.set(entry.id, parentId);
+      continue;
+    }
     const normalized =
       parentId === entry.parentId ? entry : { ...entry, parentId };
     durable.push(normalized);
@@ -156,7 +168,6 @@ export function extractRemoteTail(
 ): SessionEntry[] {
   if (remote.header.id !== cursor.sessionId)
     throw new Error("remote session id does not match cursor");
-  if (cursor.entriesSha256 === remote.entriesSha256) return [];
   const entries = durableEntries(remote.entries);
   const durableBaseIndex =
     cursor.lastEntryId === null
@@ -164,12 +175,13 @@ export function extractRemoteTail(
       : entries.findIndex((entry) => entry.id === cursor.lastEntryId);
   if (cursor.lastEntryId !== null && durableBaseIndex < 0)
     throw new Error("remote session cursor is missing");
-  const tail = entries.slice(durableBaseIndex + 1);
   if (
-    tail[0] &&
-    tail[0].parentId !== cursor.baseLeafId &&
-    cursor.lastEntryId !== null
-  ) {
+    sha256(entriesJson(entries.slice(0, durableBaseIndex + 1))) !==
+    cursor.entriesSha256
+  )
+    throw new Error("remote session changed the submitted history");
+  const tail = entries.slice(durableBaseIndex + 1);
+  if (tail[0] && tail[0].parentId !== cursor.baseLeafId) {
     throw new Error(
       "remote session tail does not continue from the submitted leaf",
     );
@@ -199,6 +211,7 @@ export function mergeSessionTail(
     header: {
       ...source.header,
       id: randomUUID(),
+      timestamp: new Date().toISOString(),
       parentSession: source.header.id,
     },
     entries,
@@ -218,11 +231,24 @@ export async function writeMergedSession(
     leafId: merged.leafId,
     entriesSha256: sha256(entriesJson(merged.entries)),
   };
+  await writeSessionArchive(path, archive);
+}
+
+/** Publish a new native session atomically, never overwrite an active/original file. */
+export async function writeSessionArchive(
+  path: string,
+  archive: SessionArchive,
+): Promise<void> {
   const temporaryPath = `${path}.${randomUUID()}.tmp`;
-  await mkdir(dirname(path), { recursive: true });
-  await writeFile(temporaryPath, serializeSessionArchive(archive), {
-    encoding: "utf8",
-    flag: "wx",
-  });
-  await rename(temporaryPath, path);
+  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+  try {
+    await writeFile(temporaryPath, serializeSessionArchive(archive), {
+      encoding: "utf8",
+      mode: 0o600,
+      flag: "wx",
+    });
+    await link(temporaryPath, path);
+  } finally {
+    await rm(temporaryPath, { force: true });
+  }
 }

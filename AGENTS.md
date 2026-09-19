@@ -2,27 +2,31 @@
 # Repository Guide
 
 ## Scope
-- Node.js 24 TypeScript ESM package providing the local Pi extension and Linux Worker.
-- Source lives in `src/`; tests mirror behavior in `test/`; deployment assets live in `deploy/` and `scripts/`.
+- Node.js 24 TypeScript ESM: local Pi extension and Linux Worker.
+- Source: `src/`; tests: `test/`; deployment: `deploy/` and `scripts/`.
+- Pi loads `src/client.ts`; CLI runs `dist/src/cli.js`. Package source and built assets.
 
 ## Commands
 - Install: `npm ci`
-- Type-check: `npm run check`
-- Test: `npm test`
+- Check/test: `npm run check && npm test`
 - Build: `npm run build`
-- Package smoke test: `npm run pack:smoke`
+- `npm run pack:smoke` verifies real tarball installation, CLI and Pi loading in isolation.
+- Shell syntax: `bash -n scripts/install.sh scripts/ci-install-worker.sh`.
 
-## Implementation Notes
-- Keep protocol payloads structured and localized only at the client/CLI boundary.
-- Treat certificate pins, pairing tokens, provider credentials, artifact paths, Git baselines, and session entry IDs as security boundaries.
-- Remote workspace changes must return as reviewable artifacts; never overwrite local files without baseline verification.
-- Pi credentials are opt-in, encrypted at rest on the Worker, and removed from the temporary runtime directory after execution.
-- Remote task recovery must preserve durable task state, replay cursored WebSocket events, and expose terminal results through `task_state`/`task_result`.
-- Session synchronization must exclude `pi-cloud-live` and `pi-cloud-task` entries and validate Git/session baselines before applying results.
+## Safety and Recovery
+- Keep protocol payloads structured; localize at client/CLI boundaries. Never echo raw HTTP/WS exceptions.
+- Verify certificate pins before sending credentials or uploads.
+- Credentials require explicit consent, encrypted storage and runtime cleanup.
+- Retry creates a new task on its original Worker; renew consent and retain history. Reconnect resumes existing execution.
+- Reuse uploads only after authenticated content-addressed existence checks.
+- Preserve locked, atomic private state writes; never delete prior state to bypass Windows contention.
+- Verify Git/session baselines before applying results; retain originals and reviewable artifacts.
+- Exclude `pi-cloud-live` and `pi-cloud-task` from synchronized history.
 
-## Verification
-- Run `npm run check && npm test` after code changes.
-- Run `npm run pack:smoke` to verify the published Pi extension and Worker bundle.
-- Run `bash -n scripts/install.sh` after shell installer changes.
-- CI validates Ubuntu, Windows, macOS, and both Docker images.
+## UX and Release
+- `/cloud` guides isolation, transfer scope and result return; confirm before uploads.
+- Exercise recovery, apply and native merge against real Pi.
+- Linux/Docker checks require real execution; Windows skips are not passes.
+- Installer tests must block real package/service operations. `ci-install-worker.sh` is exclusively for ephemeral GitHub Linux runners.
+- Follow `RELEASING.md`; require CI for the exact release commit.
 <!-- pi-agents-md:end -->

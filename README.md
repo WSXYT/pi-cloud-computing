@@ -72,14 +72,14 @@ curl -fsSL https://raw.githubusercontent.com/WSXYT/pi-cloud-computing/main/scrip
 /cloud-pair https://149.88.93.8:9443 SHA256指纹 一次性配对码
 ```
 
-把这一整行复制到本地 Pi 即可。不要手工拆分或重新输入。
+在本地 Pi 输入 `/cloud`，选择“已经安装好：粘贴配对命令”，粘贴这一整行即可。也保留直接执行 `/cloud-pair ...` 的快捷方式。
 
 ### 先装客户端，还是先装服务器？
 
 两种顺序都可以：
 
 - **先装服务器：** 安装结束保存 `/cloud-pair ...` 整行，之后在本地安装插件并粘贴。
-- **先装客户端：** 在 `/cloud` 中选择“首次使用帮助”；服务器安装完成后粘贴它打印的 `/cloud-pair ...`。
+- **先装客户端：** 在 `/cloud` 中选择“还没有 Worker：查看一键安装”，在 VPS 执行显示的命令，回来继续配对。
 
 ### 本地 `/cloud` 使用流程
 
@@ -89,41 +89,34 @@ curl -fsSL https://raw.githubusercontent.com/WSXYT/pi-cloud-computing/main/scrip
 /cloud
 ```
 
-未配对时会显示：
+只需记住这一个入口；TUI 根据当前状态引导下一步：
 
-- 配对 Worker
-- 首次使用帮助
-- 语言 / Language
+| 当前状态 | 主要操作 |
+|---|---|
+| 未配对 | 已安装则粘贴配对命令；未安装则查看 VPS 安装指引 |
+| 已配对、项目首次使用 | 首次在云端运行此项目 |
+| 任务运行中 | 返回对话查看输出、重连、中止（需确认） |
+| 任务失败 | 重新提交，保留原记录并重新确认授权 |
+| 结果返回 | 先审阅文件，再接回对话；各自确认，原会话保留 |
 
-配对后会显示：
-
-- 提交当前会话
-- 连接与任务状态
-- 重连或中止活动任务
-- 检查并应用返回结果
-- 解除配对
-- 帮助和语言
-
-随时切换语言：
-
-```text
-/cloud-language
-```
+“更多设置与历史任务”提供服务器切换、凭据撤销、历史任务、帮助与语言。每个子页面可返回；不需要记忆底层命令。
 
 ### 提交任务
 
-在一个已有 commit 的 Git 仓库中启动 Pi，然后输入：
+在已有 commit 的 Git 项目中启动 Pi，输入 `/cloud`，选择“首次在云端运行此项目”（后续为“提交当前会话”）。无需在服务器手动克隆项目。
 
-```text
-/cloud-submit 只检查这个项目，并回复当前项目结构。不要修改文件。
-```
+1. **任务**：填写希望云端完成的工作。
+2. **同步**：查看本地仓库路径、目标服务器、Git HEAD，以及下面的同步清单。云端使用独立任务副本，不覆盖本地目录。
+3. **确认并启动**：检查同步范围、执行权限和凭据授权。拒绝确认会返回同步清单并保留选择；在清单退出则取消提交。
 
-提交前会出现多选清单：
+项目归档包含 Git 历史、已跟踪文件改动和未被忽略的新文件。未跟踪且被忽略的文件不上传；**已提交到 Git 的秘密仍在历史中，不会因取消凭据授权而被移除**。
 
-- `Pi 运行环境`：extensions、skills、prompts、themes 和 Provider 摘要。
+同步清单：
+
+- `Pi 运行环境`：插件及本地包、skills、prompts、themes 和已脱敏的 Provider 配置；不是只上传摘要。
 - `Git 工作区`：完整 Git bundle 加未提交和已选择的未跟踪文件；远程执行必需。
 - `当前对话`：Pi 原生 JSONL session；可取消选择以启动新云端会话。
-- `Pi Provider 凭据`：仅本地存在 `auth.json` 时显示，包含敏感内容，默认不选。
+- `Pi Provider 凭据`：检测到 `auth.json`、配置密钥或引用的环境变量时显示，包含敏感内容，默认不选。
 
 按键：
 
@@ -131,7 +124,7 @@ curl -fsSL https://raw.githubusercontent.com/WSXYT/pi-cloud-computing/main/scrip
 ↑↓ 移动    空格多选    Enter 确认    Esc 取消
 ```
 
-明确选择“上传所选内容并启动”后才会上传。选择凭据时，数据通过已固定证书的 TLS 传输，在 Worker 端使用 AES-256-GCM 加密保存，执行时临时解密，结束后删除临时明文。
+“下一步：检查并确认”本身不上传；只有最后确认后才会上传和启动。选择凭据时，数据通过已固定证书的 TLS 传输，在 Worker 端使用 AES-256-GCM 加密保存，执行时临时解密，结束后删除临时明文。
 
 任务运行时，普通输入会发送到云端 Pi 的 `steer` 或 `followUp` 队列。管理命令：
 
@@ -140,6 +133,13 @@ curl -fsSL https://raw.githubusercontent.com/WSXYT/pi-cloud-computing/main/scrip
 /cloud-reconnect
 /cloud-abort
 ```
+
+### 上传中断或任务失败后
+
+- 仍在运行但连接断开：使用 `/cloud-reconnect`，继续接收同一个任务，避免重复执行。
+- 已失败：从 `/cloud` 选择“重新提交上次失败的任务”，或输入 `/cloud-retry`。重启 Pi 后也可通过 `pi -c` 回到原会话再重试。
+- 重试保留失败记录，使用相同提示向**原 Worker 创建新任务**，重新检查当前项目、对话和同步范围。凭据仍须显式选择与确认；不会沿用上次授权。
+- 环境、项目和对话归档分别按内容哈希复用；只有 Worker 确认已有相同内容时才跳过上传。内容已变化时重新上传。重试不是恢复原执行点，远端已执行的外部操作可能再次发生。
 
 ### 获取结果
 
@@ -254,7 +254,7 @@ git commit -m "initial"
 #### host 和 Docker 如何选择
 
 - `host`：最容易试用，Pi 使用 systemd 服务账号权限运行。
-- `docker`：无网络、只读根文件系统，只挂载任务工作区；安装器会构建专用 runner 镜像。
+- `docker`：只读根文件系统，挂载本任务的工作区与临时运行环境。安装器会询问是否允许网络访问；模型 API 和依赖安装需要明确允许 `bridge`。无交互安装必须提供 `--docker-network bridge` 或 `none`，不会默认授权出网。
 
 ### 安全边界
 
@@ -317,21 +317,15 @@ Restart Pi or enter `/reload`, then open:
 /cloud
 ```
 
-The first-run menu contains Pair Worker, Help, and Language. Once paired it becomes the status and task control center.
+This is the only entry point you need to remember. Without a Worker it offers a server installation guide or pairing-command paste. After pairing, choose **Run this project in the cloud for the first time**. No manual server-side project clone is required.
 
-Switch language at any time:
+The guided submission has three steps: **task → sync selection → final confirmation**. It shows the local repository, destination and Git HEAD. **Next: review and confirm** uploads nothing; declining final consent returns to your selections. Cancelling the selection exits without submitting.
 
-```text
-/cloud-language
-```
+The Worker creates a separate task copy. The project archive includes Git history, tracked changes and non-ignored new files; secrets already committed to Git are still included, even with credential authorization off.
 
-From a Git repository with at least one commit:
+During execution the home screen offers output, reconnect and abort. When results arrive it prioritizes file review, then conversation merge. **More settings and task history** contains server/credential management, history, language and help. Subcommands below remain optional shortcuts.
 
-```text
-/cloud-submit Inspect this project and describe its structure. Do not change files.
-```
-
-The preflight is a real multi-select checklist. Use Up/Down, Space, Enter, and Escape. Git workspace is required; runtime environment and native session are optional. Pi provider credentials appear only when `auth.json` exists and are off by default.
+The preflight is a multi-select checklist. Use Up/Down, Space, Enter, and Escape. Git workspace is required; runtime environment and native session are selected by default but optional. The runtime archive contains plugins/packages, skills, prompts, themes and redacted provider configuration—not just metadata. Provider credentials appear when auth files, embedded keys or referenced environment variables are found, and are off by default.
 
 While the task runs, normal input goes to remote Pi through `steer` or `followUp`. Commands:
 
@@ -344,6 +338,13 @@ While the task runs, normal input goes to remote Pi through `steer` or `followUp
 ```
 
 Git results are baseline-checked before application. Native session results are validated by entry ID and parentId before Pi switches sessions.
+
+### Interrupted uploads and retries
+
+- If the task is still active but disconnected, use `/cloud-reconnect` to resume the same task without duplicating execution.
+- For a failed task, choose **Retry the last failed task** in `/cloud`, or use `/cloud-retry`. After restarting Pi, use `pi -c` to return to its session first.
+- Retry retains the failed record and creates a **new task on the original Worker**, using the same prompt and the current project/conversation. Review the sync choices again; credential authorization is never carried forward automatically.
+- Environment, project and session archives are reused independently by content hash, only after the Worker confirms they exist. Changed content is uploaded again. This is not execution-point recovery: external actions already performed remotely may run again.
 
 ### Worker operations
 
@@ -363,7 +364,7 @@ journalctl -u pi-cloud-worker -f
 
 ### Update
 
-Run the same installer again. It updates and rebuilds the source while preserving existing state.
+Run the same installer again. Source updates are fast-forward only: dirty checkouts, conflicting commits and non-Git directories are not overwritten. Language updates preserve paired connections and task recovery state; corrupt state stops installation instead of resetting it. The installer checks mandatory command exits, and the Worker must pass its pinned local health check before it reports readiness.
 
 ### Troubleshooting
 
@@ -371,7 +372,7 @@ Run the same installer again. It updates and rebuilds the source while preservin
 - Port unavailable: check `systemctl`, `ss -ltnp`, UFW, and the VPS provider security group.
 - Missing Git `HEAD`: create an initial commit.
 - Missing provider auth: submit again and explicitly select Pi provider credentials.
-- `host` runs with the systemd service account permissions. Docker uses a no-network, read-only runner image with only the task workspace mounted.
+- `host` runs with the systemd service account permissions. Docker has a read-only root and mounts this task's workspace/runtime. The installer asks explicitly about egress; model APIs and dependency installation need `bridge`. Non-interactive Docker installs must pass `--docker-network bridge` or `none`.
 
 ### Development and release gates
 

@@ -1,16 +1,36 @@
-import { readdir, rm, stat, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { readdir, rm, stat } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { homedir, userInfo } from "node:os";
+import { writePrivateFile } from "../storage.js";
 
 export interface SystemdUnitOptions {
   executable?: string;
   cliPath?: string;
   dataDir: string;
+  docker?: boolean;
+}
+
+function systemdQuote(value: string, executable = false): string {
+  if (/[\u0000-\u001f\u007f]/.test(value)) throw new Error("invalid systemd value");
+  const escaped = value.replace(/%/g, "%%").replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  return `"${executable ? escaped.replace(/\$/g, "$$$$") : escaped}"`;
 }
 
 export function renderSystemdUnit(options: SystemdUnitOptions): string {
   const executable = options.executable ?? process.execPath;
   const cliPath = options.cliPath ?? process.argv[1] ?? "pi-cloud";
-  return `[Unit]\nDescription=Pi Cloud Worker\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nType=simple\nExecStart=${executable} ${cliPath} worker serve\nRestart=on-failure\nRestartSec=3\nEnvironment=PI_CLOUD_DATA_DIR=${options.dataDir}\nNoNewPrivileges=true\nPrivateTmp=true\n\n[Install]\nWantedBy=multi-user.target\n`;
+  return [
+    "[Unit]", "Description=Pi Cloud Worker", "After=network-online.target", "Wants=network-online.target", "",
+    "[Service]", "Type=simple", `User=${systemdQuote(userInfo().username)}`,
+    ...(options.docker ? ["SupplementaryGroups=docker"] : []),
+    `ExecStart=${systemdQuote(executable, true)} ${systemdQuote(cliPath, true)} worker serve`,
+    `Environment=${systemdQuote(`PI_CLOUD_DATA_DIR=${options.dataDir}`)}`,
+    `Environment=${systemdQuote(`HOME=${homedir()}`)}`,
+    `Environment=${systemdQuote(`PATH=${dirname(executable)}:${process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin"}`)}`,
+    "Restart=on-failure", "RestartSec=3", "UMask=0077", "KillMode=control-group", "TimeoutStopSec=30",
+    "NoNewPrivileges=true", "PrivateTmp=true", "ProtectSystem=strict", "ProtectHome=read-only",
+    `ReadWritePaths=${systemdQuote(options.dataDir)}`, "", "[Install]", "WantedBy=multi-user.target", "",
+  ].join("\n");
 }
 
 export async function writeSystemdUnit(
@@ -18,9 +38,7 @@ export async function writeSystemdUnit(
   options: Omit<SystemdUnitOptions, "dataDir"> = {},
 ): Promise<string> {
   const path = join(dataDir, "pi-cloud-worker.service");
-  await writeFile(path, renderSystemdUnit({ ...options, dataDir }), {
-    mode: 0o600,
-  });
+  await writePrivateFile(path, renderSystemdUnit({ ...options, dataDir }));
   return path;
 }
 
@@ -35,7 +53,8 @@ export async function cleanupExpiredTasks(
   let entries;
   try {
     entries = await readdir(root, { withFileTypes: true });
-  } catch {
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     return [];
   }
   const removed: string[] = [];

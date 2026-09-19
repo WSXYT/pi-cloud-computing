@@ -87,7 +87,7 @@ test("pairs, uploads a repository, runs RPC, and returns Git results", async () 
         sessionId: "new",
         baseLeafId: null,
         lastEntryId: null,
-        entriesSha256: "empty",
+        entriesSha256: sha256(""),
       },
       artifacts: [
         {
@@ -105,12 +105,15 @@ test("pairs, uploads a repository, runs RPC, and returns Git results", async () 
     connection.send(socket, { type: "task_create", task });
     for (
       let attempt = 0;
-      attempt < 120 && worker.tasks.get(task.taskId)?.status !== "completed";
+      attempt < 120 &&
+      !["completed", "failed", "aborted"].includes(
+        worker.tasks.get(task.taskId)?.status ?? "",
+      );
       attempt += 1
     )
       await new Promise((resolve) => setTimeout(resolve, 25));
     const record = worker.tasks.get(task.taskId);
-    assert.equal(record?.status, "completed");
+    assert.equal(record?.status, "completed", record?.result?.error);
     const statusEvent = record.events.findLast(
       (event) => event.payload.status === "completed",
     );

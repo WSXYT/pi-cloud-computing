@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { request } from "node:https";
 import WebSocket from "ws";
+import { once } from "node:events";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,6 +11,43 @@ import { createPairing } from "../src/worker/pairing.js";
 import { startWorkerServer } from "../src/worker/server.js";
 import { encodeFrame, type TaskSpec } from "../src/protocol.js";
 import { loadWorkerState, saveWorkerState } from "../src/worker/state.js";
+
+// HTTP helpers below deliberately bypass TLS only against this isolated in-process fixture;
+// the production connection pin is independently tested in client-network.test.ts.
+test("public pairing is bounded, HTTP errors are structured, and live token revocation closes sockets", { timeout: 20_000 }, async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), "pi-cloud-boundaries-"));
+  const worker = await startWorkerServer({ dataDir, publicIp: "127.0.0.1", port: 0, piVersion: "0.85.1", nodeVersion: process.version, gitVersion: "git", enableExecution: false });
+  try {
+    const invalid = await call(`${worker.url}/pair`, { method: "POST", body: "{ sensitive fixture payload" });
+    assert.equal(invalid.status, 400);
+    assert.deepEqual(JSON.parse(invalid.body.toString()), { error: "INVALID_FRAME" });
+    assert.equal((await call(`${worker.url}/pair`, { method: "POST", body: "x".repeat(5000) })).status, 413);
+    const state = await loadWorkerState(dataDir);
+    const pairing = createPairing(state);
+    await saveWorkerState(dataDir, state);
+    const wrong = await call(`${worker.url}/pair`, { method: "POST", body: JSON.stringify({ code: "wrong" }) });
+    assert.equal(wrong.status, 403);
+    assert.deepEqual(JSON.parse(wrong.body.toString()), { error: "PAIRING_CODE_INVALID" });
+    const paired = await call(`${worker.url}/pair`, { method: "POST", body: JSON.stringify({ code: pairing.code }) });
+    const { token } = JSON.parse(paired.body.toString()) as { token: string };
+    const missing = await call(`${worker.url}/artifacts/missing`, { token });
+    assert.equal(missing.status, 404);
+    assert.deepEqual(JSON.parse(missing.body.toString()), { error: "NOT_FOUND" });
+    const invalidId = await call(`${worker.url}/artifacts/%2Foutside`, { token });
+    assert.equal(invalidId.status, 400);
+    assert.ok(!invalidId.body.toString().includes(dataDir));
+    const socket = new WebSocket(`${worker.url.replace("https:", "wss:")}/events`, { rejectUnauthorized: false, headers: { authorization: `Bearer ${token}` } });
+    await once(socket, "open");
+    const closed = once(socket, "close");
+    assert.equal((await call(`${worker.url}/tokens/current`, { method: "DELETE", token })).status, 200);
+    assert.equal((await closed)[0], 4003);
+    assert.equal((await call(`${worker.url}/worker/manifest`, { token })).status, 401);
+    let last;
+    for (let index = 0; index < 60; index++) last = await call(`${worker.url}/pair`, { method: "POST", body: JSON.stringify({ code: "wrong" }) });
+    assert.equal(last!.status, 429);
+    assert.deepEqual(JSON.parse(last!.body.toString()), { error: "PAIRING_RATE_LIMITED" });
+  } finally { await worker.close(); }
+});
 
 async function call(
   url: string,

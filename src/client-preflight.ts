@@ -16,6 +16,7 @@ export interface SyncPreflightItem {
 
 export interface SyncPreflightLabels {
   title: string;
+  summary?: string[];
   required: string;
   upload: string;
   cancel: string;
@@ -28,23 +29,30 @@ export async function selectSyncItems(
   items: SyncPreflightItem[],
   labels: SyncPreflightLabels,
 ): Promise<Set<string> | null> {
+  const selected = new Set(items.filter((item) => item.selected || item.required).map((item) => item.id));
   if (ctx.mode !== "tui") {
     if (!ctx.hasUI) return null;
-    const approved = await ctx.ui.confirm(
-      labels.title,
-      items.map((item) => `${item.label}: ${item.description}`).join("\n"),
-    );
-    return approved
-      ? new Set(items.filter((item) => item.selected).map((item) => item.id))
-      : null;
+    while (true) {
+      const choices = items.map((item) => {
+        let marker = selected.has(item.id) ? "☑" : "☐";
+        if (item.required) marker = "■";
+        return `${marker} ${item.label}${item.required ? ` (${labels.required})` : ""} · ${item.description}`;
+      });
+      const choice = await ctx.ui.select([labels.title, ...(labels.summary ?? [])].join("\n"), [...choices, labels.upload, labels.cancel]);
+      if (choice === undefined || choice === labels.cancel) return null;
+      if (choice === labels.upload) {
+        if (selected.size) return selected;
+        ctx.ui.notify(labels.empty, "warning");
+        continue;
+      }
+      const item = items[choices.indexOf(choice)];
+      if (!item || item.required) continue;
+      if (selected.has(item.id)) selected.delete(item.id);
+      else selected.add(item.id);
+    }
   }
 
   return ctx.ui.custom<Set<string> | null>((tui, theme, _keybindings, done) => {
-    const selected = new Set(
-      items
-        .filter((item) => item.selected || item.required)
-        .map((item) => item.id),
-    );
     let cursor = 0;
     const uploadIndex = items.length;
     const cancelIndex = items.length + 1;
@@ -84,13 +92,15 @@ export async function selectSyncItems(
             Math.max(1, width),
           ),
         );
+        for (const line of labels.summary ?? []) lines.push(...wrapTextWithAnsi(` ${theme.fg("muted", line)}`, Math.max(1, width)));
         lines.push("");
         for (let index = 0; index < items.length; index += 1) {
           const item = items[index];
           if (!item) continue;
           const focused = cursor === index;
           const checked = selected.has(item.id);
-          const marker = item.required ? "■" : checked ? "☑" : "☐";
+          let marker = checked ? "☑" : "☐";
+          if (item.required) marker = "■";
           const suffix = item.required ? `  ${labels.required}` : "";
           const prefix = focused ? theme.fg("accent", "> ") : "  ";
           const color = checked ? "text" : "muted";

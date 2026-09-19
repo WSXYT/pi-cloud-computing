@@ -1,16 +1,17 @@
 import assert from "node:assert/strict";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
 import type {
   ExtensionAPI,
+  ExtensionCommandContext,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import extension from "../src/client.js";
 import { CloudConnection } from "../src/client-network.js";
-import { saveClientState } from "../src/client-state.js";
+import { loadClientState, saveClientState, type CloudTaskState } from "../src/client-state.js";
 import type { TaskSpec } from "../src/protocol.js";
 import { createPairing } from "../src/worker/pairing.js";
 import { startWorkerServer } from "../src/worker/server.js";
@@ -111,6 +112,7 @@ test("restores a missed terminal event on session start", async () => {
       | undefined;
     const fake = {
       registerCommand() {},
+      registerEntryRenderer() {},
       on(name: string, handler: typeof sessionStart) {
         if (name === "session_start") sessionStart = handler;
       },
@@ -121,7 +123,7 @@ test("restores a missed terminal event on session start", async () => {
     await sessionStart?.({}, {
       cwd: dataDir,
       hasUI: false,
-      sessionManager: { getSessionId: () => "recover-session" },
+      sessionManager: { getSessionId: () => "recover-session", getEntries: () => [] },
       ui,
     } as unknown as ExtensionContext);
     for (let attempt = 0; attempt < 40; attempt += 1) {
@@ -144,6 +146,54 @@ test("restores a missed terminal event on session start", async () => {
   }
 });
 
+test("retry uses the failed task's Worker without switching the default or losing task history", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "pi-cloud-retry-"));
+  const statePath = join(root, "state.json");
+  const sessionPath = join(root, "session.jsonl");
+  const previous = process.env.PI_CLOUD_CLIENT_STATE;
+  process.env.PI_CLOUD_CLIENT_STATE = statePath;
+  t.after(async () => {
+    if (previous === undefined) delete process.env.PI_CLOUD_CLIENT_STATE;
+    else process.env.PI_CLOUD_CLIENT_STATE = previous;
+    await rm(root, { recursive: true, force: true });
+  });
+  const failed: CloudTaskState = {
+    taskId: "failed-upload", workerId: "original", baseUrl: "https://original.invalid", fingerprint: "aa".repeat(32),
+    projectId: root, sessionId: "local-session", baseLeafId: null, lastEntryId: null, entriesSha256: "empty",
+    cursor: 0, status: "failed", prompt: "original prompt", updatedAt: new Date().toISOString(),
+  };
+  await saveClientState({ locale: "en", activeWorkerId: "different", tasks: [failed], connections: ["original", "different"].map((id) => ({
+    workerId: id, baseUrl: `https://${id}.invalid`, fingerprint: "aa".repeat(32), token: "fixture-token", pairedAt: new Date().toISOString(),
+  })) }, statePath);
+  await writeFile(sessionPath, "fixture");
+  const commands = new Map<string, (args: string, ctx: ExtensionCommandContext) => Promise<void>>();
+  let start: ((event: unknown, ctx: ExtensionContext) => Promise<void>) | undefined;
+  const notifications: string[] = [];
+  const fake = {
+    registerCommand(name: string, options: { handler: (args: string, ctx: ExtensionCommandContext) => Promise<void> }) { commands.set(name, options.handler); },
+    registerEntryRenderer() {},
+    on(name: string, handler: typeof start) { if (name === "session_start") start = handler; },
+  } as unknown as ExtensionAPI;
+  const ctx = {
+    cwd: root, hasUI: true, isIdle: () => true, hasPendingMessages: () => false,
+    sessionManager: { getSessionId: () => "local-session", getSessionName: () => "existing", getSessionFile: () => sessionPath },
+    ui: { setStatus() {}, setWidget() {}, notify(message: string) { notifications.push(message); } },
+  } as unknown as ExtensionCommandContext;
+  const contacted: string[] = [];
+  t.mock.method(CloudConnection.prototype, "workerInfo", async function (this: CloudConnection) {
+    contacted.push(this.baseUrl);
+    throw new Error("stop before preflight");
+  });
+  await extension(fake);
+  await start!({}, ctx);
+  await commands.get("cloud-retry")!("", ctx);
+  assert.deepEqual(contacted, ["https://original.invalid"]);
+  assert.ok(notifications.some((text) => text.includes("stop before preflight")));
+  const saved = await loadClientState(statePath);
+  assert.equal(saved.activeWorkerId, "different");
+  assert.deepEqual(saved.tasks, [failed], "a failed retry must retain the original task");
+});
+
 test("registers the cloud command surface", async () => {
   const commands: string[] = [];
   const fake = {
@@ -151,6 +201,7 @@ test("registers the cloud command surface", async () => {
       commands.push(name);
     },
     on() {},
+    registerEntryRenderer() {},
   } as unknown as ExtensionAPI;
   await extension(fake);
   assert.deepEqual(commands, [
@@ -158,9 +209,15 @@ test("registers the cloud command surface", async () => {
     "cloud-unpair",
     "cloud-abort",
     "cloud-submit",
+    "cloud-retry",
     "cloud-reconnect",
     "cloud-apply",
     "cloud-merge",
+    "cloud-local",
+    "cloud-tasks",
+    "cloud-inputs",
+    "cloud-secrets",
+    "cloud-worker",
     "cloud-status",
     "cloud-help",
     "cloud-language",

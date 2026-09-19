@@ -5,6 +5,8 @@ import type {
   TaskSnapshot,
   TaskSpec,
   TaskStatus,
+  TaskUiRequest,
+  TaskUiResponse,
 } from "../protocol.js";
 
 export interface TaskRecord {
@@ -14,6 +16,8 @@ export interface TaskRecord {
   events: TaskEvent[];
   inputs: TaskInput[];
   result?: TaskResult;
+  finalizing?: boolean;
+  uiRequests?: TaskUiRequest[];
 }
 
 type Subscriber = (event: TaskEvent) => void;
@@ -22,8 +26,13 @@ export class WorkerTaskManager {
   private readonly tasks = new Map<string, TaskRecord>();
   private readonly subscribers = new Set<Subscriber>();
   private activeTaskId: string | undefined;
+  private paused = false;
 
-  constructor(private readonly onChange?: (records: TaskRecord[]) => void) {}
+  constructor(private readonly onChange?: () => void) {}
+
+  pause(): void {
+    this.paused = true;
+  }
 
   subscribe(subscriber: Subscriber): () => void {
     this.subscribers.add(subscriber);
@@ -32,7 +41,11 @@ export class WorkerTaskManager {
 
   create(task: TaskSpec): TaskRecord {
     const existing = this.tasks.get(task.taskId);
-    if (existing) return existing;
+    if (existing) {
+      if (JSON.stringify(existing.task) !== JSON.stringify(task))
+        throw new Error("task id already exists with different content");
+      return existing;
+    }
     const record: TaskRecord = {
       task,
       status: "queued",
@@ -41,7 +54,7 @@ export class WorkerTaskManager {
       inputs: [],
     };
     this.tasks.set(task.taskId, record);
-    if (this.activeTaskId) {
+    if (this.activeTaskId || this.paused) {
       this.emit(task.taskId, "status", { status: "queued" });
     } else {
       this.activeTaskId = task.taskId;
@@ -56,6 +69,8 @@ export class WorkerTaskManager {
     this.tasks.clear();
     this.activeTaskId = undefined;
     for (const record of records) {
+      record.finalizing = false;
+      record.uiRequests = [];
       if (record.status === "running") {
         record.status = "failed";
         record.result = {
@@ -119,6 +134,8 @@ export class WorkerTaskManager {
       status: task.status,
       cursor: task.cursor,
       ...(task.result ? { result: task.result } : {}),
+      ...(task.finalizing ? { finalizing: true } : {}),
+      ...(task.uiRequests?.length ? { uiRequests: task.uiRequests } : {}),
     };
   }
 
@@ -131,25 +148,68 @@ export class WorkerTaskManager {
   input(input: TaskInput): TaskRecord {
     const task = this.tasks.get(input.taskId);
     if (!task) throw new Error("task not found");
-    if (task.status !== "running") throw new Error("task is not active");
+    const previous = input.id
+      ? task.inputs.find((item) => item.id === input.id)
+      : undefined;
+    if (previous) {
+      if (JSON.stringify(previous) !== JSON.stringify(input))
+        throw new Error("input id already exists with different content");
+      return task;
+    }
+    if (task.status !== "running" && task.status !== "queued")
+      throw new Error("task is not active");
     task.inputs.push(input);
-    this.emit(input.taskId, "message", {
-      delivery: input.delivery,
-      message: input.message,
-    });
+    this.emit(input.taskId, "message", { ...input });
     this.changed();
     return task;
   }
 
-  abort(taskId: string): TaskRecord {
+  requestUi(taskId: string, request: TaskUiRequest): void {
+    const task = this.tasks.get(taskId);
+    if (!task || task.status !== "running") return;
+    task.uiRequests = [
+      ...(task.uiRequests ?? []).filter((item) => item.id !== request.id),
+      request,
+    ];
+    this.changed();
+  }
+
+  answerUi(response: TaskUiResponse): void {
+    const task = this.tasks.get(response.taskId);
+    const request = task?.uiRequests?.find((item) => item.id === response.id);
+    if (!task || task.status !== "running" || !request)
+      throw new Error("remote dialog is no longer pending");
+    if (
+      !response.cancelled &&
+      (request.method === "confirm"
+        ? typeof response.confirmed !== "boolean"
+        : typeof response.value !== "string")
+    )
+      throw new Error("invalid remote dialog response");
+    if (
+      request.method === "select" &&
+      !response.cancelled &&
+      !request.options?.includes(response.value!)
+    )
+      throw new Error("invalid remote dialog option");
+    task.uiRequests = task.uiRequests!.filter(
+      (item) => item.id !== response.id,
+    );
+    this.changed();
+  }
+
+  abort(taskId: string, deferRelease = false): TaskRecord {
     const task = this.tasks.get(taskId);
     if (!task) throw new Error("task not found");
+    if (task.status === "aborted") return task;
     if (task.status !== "running" && task.status !== "queued")
       throw new Error("task is not active");
     task.status = "aborted";
+    task.finalizing = deferRelease && this.activeTaskId === taskId;
+    task.uiRequests = [];
     task.result = { taskId, status: "aborted" };
-    this.emit(taskId, "status", { status: "aborted" });
-    if (this.activeTaskId === taskId) this.activateNext();
+    this.emit(taskId, "status", { status: "aborted", finalizing: task.finalizing });
+    if (this.activeTaskId === taskId && !deferRelease) this.activateNext();
     this.changed();
     return task;
   }
@@ -158,8 +218,10 @@ export class WorkerTaskManager {
     const task = this.tasks.get(result.taskId);
     if (!task) throw new Error("task not found");
     task.status = result.status;
+    task.finalizing = false;
+    task.uiRequests = [];
     task.result = result;
-    this.emit(result.taskId, "status", { status: result.status });
+    this.emit(result.taskId, "status", { ...result });
     if (this.activeTaskId === result.taskId) this.activateNext();
     this.changed();
     return task;
@@ -173,8 +235,10 @@ export class WorkerTaskManager {
     const task = this.tasks.get(taskId);
     if (!task) throw new Error("task not found");
     task.status = status;
-    task.result = { taskId, status, ...payload };
-    this.emit(taskId, "status", { status, ...payload });
+    task.finalizing = false;
+    task.uiRequests = [];
+    task.result = { ...payload, taskId, status };
+    this.emit(taskId, "status", { ...payload, status });
     if (this.activeTaskId === taskId) this.activateNext();
     this.changed();
     return task;
@@ -188,6 +252,7 @@ export class WorkerTaskManager {
 
   private activateNext(): void {
     this.activeTaskId = undefined;
+    if (this.paused) return;
     const next = [...this.tasks.values()].find(
       (task) => task.status === "queued",
     );
@@ -198,7 +263,7 @@ export class WorkerTaskManager {
   }
 
   private changed(): void {
-    this.onChange?.(this.exportState());
+    this.onChange?.();
   }
 
   private emit(

@@ -3,7 +3,7 @@ FROM node:24-bookworm-slim
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts
-RUN npm install --global @earendil-works/pi-coding-agent@0.84.2
+RUN npm install --global @earendil-works/pi-coding-agent@0.85.1
 COPY dist ./dist
 
 ENV PI_CLOUD_DATA_DIR=/var/lib/pi-cloud

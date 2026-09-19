@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
 import { runWorkerCli } from "../src/worker/cli.js";
+import { loadClientState } from "../src/client-state.js";
 
 test("worker pair prints one complete copy-paste command", async () => {
   const previous = process.env.PI_CLOUD_DATA_DIR;
@@ -37,4 +38,28 @@ test("worker pair prints one complete copy-paste command", async () => {
     output.some((line) => line.startsWith("pairing-expires-at=")),
     true,
   );
+});
+
+test("installer language command preserves paired connections and fails closed on corrupt recovery state", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-cloud-installer-state-"));
+  const path = join(root, "state.json");
+  const previous = process.env.PI_CLOUD_CLIENT_STATE;
+  process.env.PI_CLOUD_CLIENT_STATE = path;
+  const connection = { baseUrl: "https://example.invalid", workerId: "worker", fingerprint: "aa".repeat(32), token: "fixture-token", pairedAt: new Date().toISOString() };
+  try {
+    await writeFile(path, `\uFEFF${JSON.stringify({ connections: [connection], activeWorkerId: "worker", locale: "en" })}`);
+    assert.equal(await runWorkerCli(["client", "language", "zh-CN"], () => {}), 0);
+    const saved = await loadClientState(path);
+    assert.deepEqual(saved.connections, [connection]);
+    assert.equal(saved.activeWorkerId, "worker");
+    assert.equal(saved.locale, "zh-CN");
+    assert.notEqual((await readFile(path, "utf8")).charCodeAt(0), 0xfeff);
+    await writeFile(path, "{ corrupt existing recovery state");
+    await assert.rejects(() => runWorkerCli(["client", "language", "en"], () => {}));
+    assert.equal(await readFile(path, "utf8"), "{ corrupt existing recovery state");
+  } finally {
+    if (previous === undefined) delete process.env.PI_CLOUD_CLIENT_STATE;
+    else process.env.PI_CLOUD_CLIENT_STATE = previous;
+    await rm(root, { recursive: true, force: true });
+  }
 });

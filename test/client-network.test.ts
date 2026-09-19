@@ -37,12 +37,48 @@ test("keeps the verified certificate pin across pairing, uploads, and WSS", asyn
       normalizeFingerprint(paired.certificateFingerprint),
       fingerprint,
     );
+    let rejectedHttpRequests = 0;
+    let rejectedUpgrades = 0;
+    const countRequest = () => rejectedHttpRequests++;
+    const countUpgrade = () => rejectedUpgrades++;
+    worker.server.on("request", countRequest);
+    worker.server.on("upgrade", countUpgrade);
     const wrongPin = new CloudConnection(worker.url, "00", paired.token);
     await assert.rejects(
       () => wrongPin.upload("wrong-pin", Buffer.from("blocked"), "text/plain"),
       /CERTIFICATE_MISMATCH/,
     );
+    await assert.rejects(
+      () => wrongPin.pair("private-pairing-code"),
+      /CERTIFICATE_MISMATCH/,
+    );
+    await assert.rejects(
+      () => wrongPin.uploadSecret("private-key", "must-not-leak"),
+      /CERTIFICATE_MISMATCH/,
+    );
+    await assert.rejects(
+      () => wrongPin.openEvents(() => undefined),
+      /CERTIFICATE_MISMATCH/,
+    );
+    assert.equal(
+      rejectedHttpRequests,
+      0,
+      "no HTTP headers or body may precede pin verification",
+    );
+    assert.equal(
+      rejectedUpgrades,
+      0,
+      "no WebSocket authorization may precede pin verification",
+    );
+    worker.server.off("request", countRequest);
+    worker.server.off("upgrade", countUpgrade);
+    assert.equal(await connection.hasArtifact("first"), false, "first upload must see a 404 as absent");
+    await assert.rejects(() => wrongPin.hasArtifact("first"), /CERTIFICATE_MISMATCH/);
+    const unauthenticated = new CloudConnection(worker.url, fingerprint);
+    await assert.rejects(() => unauthenticated.hasArtifact("first"), /401|AUTH_REQUIRED/, "authorization failure must not look like a cache miss");
     await connection.upload("first", Buffer.from("one"), "text/plain");
+    assert.equal(await connection.hasArtifact("first"), true);
+    assert.equal((await connection.download("first")).toString(), "one");
     await connection.upload("second", Buffer.from("two"), "text/plain");
     await connection.uploadSecret("pi-auth", '{"provider":"secret"}');
     assert.equal(

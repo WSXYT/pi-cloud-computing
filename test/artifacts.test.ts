@@ -19,6 +19,14 @@ test("stores artifacts immutably by id", async () => {
   assert.equal((await store.read("result-1")).toString(), "ok");
   await assert.rejects(
     () => store.put("../escape", Buffer.from("x")),
-    /invalid artifact id/,
+    /invalid task\/artifact identifier/,
+  );
+  const copies = await Promise.all(
+    Array.from({ length: 5 }, () => store.put("same", Buffer.from("atomic"))),
+  );
+  assert.ok(copies.every((copy) => copy.sha256 === copies[0]!.sha256));
+  await assert.rejects(
+    () => store.readVerified({ ...first, sha256: "0".repeat(64) }),
+    /ARTIFACT_HASH_MISMATCH/,
   );
 });

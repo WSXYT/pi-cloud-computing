@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+
+import { withPrivateFileLock, writePrivateJson } from "../storage.js";
 
 export interface WorkerToken {
   id: string;
@@ -8,7 +10,6 @@ export interface WorkerToken {
   createdAt: string;
   revokedAt?: string;
 }
-
 export interface WorkerState {
   workerId: string;
   certificateFingerprint?: string;
@@ -17,26 +18,49 @@ export interface WorkerState {
   tokens: WorkerToken[];
   activeTaskId?: string;
 }
-
 export function newWorkerState(): WorkerState {
   return { workerId: randomUUID(), tokens: [] };
 }
 
 export async function loadWorkerState(dataDir: string): Promise<WorkerState> {
+  const path = join(dataDir, "state.json");
+  let text: string;
   try {
-    const value: unknown = JSON.parse(
-      await readFile(join(dataDir, "state.json"), "utf8"),
-    );
-    if (typeof value !== "object" || value === null || Array.isArray(value))
-      throw new Error("invalid state");
-    const state = value as WorkerState;
-    if (typeof state.workerId !== "string" || !Array.isArray(state.tokens))
+    text = await readFile(path, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    const state = newWorkerState();
+    try {
+      await writePrivateJson(path, state, true);
+      return state;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      return loadWorkerState(dataDir);
+    }
+  }
+  try {
+    const state = JSON.parse(text.replace(/^\uFEFF/, "")) as WorkerState;
+    if (
+      !state ||
+      typeof state.workerId !== "string" ||
+      !state.workerId ||
+      !Array.isArray(state.tokens) ||
+      state.tokens.some(
+        (token) =>
+          !token ||
+          typeof token.id !== "string" ||
+          typeof token.hash !== "string" ||
+          !/^[a-f0-9]{64}$/.test(token.hash) ||
+          (token.revokedAt !== undefined && typeof token.revokedAt !== "string") ||
+          typeof token.createdAt !== "string",
+      )
+    )
       throw new Error("invalid state");
     return state;
   } catch {
-    const state = newWorkerState();
-    await saveWorkerState(dataDir, state);
-    return state;
+    throw new Error(
+      "invalid state.json; pairing and revocation data were preserved",
+    );
   }
 }
 
@@ -44,10 +68,22 @@ export async function saveWorkerState(
   dataDir: string,
   state: WorkerState,
 ): Promise<void> {
-  await mkdir(dataDir, { recursive: true, mode: 0o700 });
-  await writeFile(
-    join(dataDir, "state.json"),
-    `${JSON.stringify(state, null, 2)}\n`,
-    { mode: 0o600 },
-  );
+  await writePrivateJson(join(dataDir, "state.json"), state);
+}
+
+/** The service and CLI serialize administrative state changes across processes. */
+export async function withWorkerStateLock<T>(
+  dataDir: string,
+  action: () => Promise<T>,
+): Promise<T> {
+  return withPrivateFileLock(join(dataDir, "state.json"), action);
+}
+
+export async function updateWorkerState<T>(dataDir: string, update: (state: WorkerState) => T | Promise<T>): Promise<T> {
+  return withWorkerStateLock(dataDir, async () => {
+    const state = await loadWorkerState(dataDir);
+    const result = await update(state);
+    await saveWorkerState(dataDir, state);
+    return result;
+  });
 }
