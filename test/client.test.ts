@@ -282,6 +282,9 @@ test("registers F6 as the cloud submit shortcut", async () => {
     await shortcutHandler?.(ctx);
     assert.equal(editor, "");
     assert.equal(sent, "/cloud-submit run this in the cloud");
+    await saveClientState({ ...(await loadClientState()), shortcut: "f9" });
+    await extension(fake);
+    assert.equal(shortcut, "f9", "only the persisted cloud key is registered after reload");
   } finally {
     if (previous === undefined) delete process.env.PI_CLOUD_CLIENT_STATE;
     else process.env.PI_CLOUD_CLIENT_STATE = previous;
@@ -307,6 +310,7 @@ test("registers the cloud command surface", async () => {
     "cloud-append",
     "cloud-submit",
     "cloud-retry",
+    "cloud-shortcut",
     "cloud-reconnect",
     "cloud-apply",
     "cloud-merge",

@@ -32,6 +32,13 @@ jobs:
       - name: Install, pair, restart and stop the native background service
         timeout-minutes: 8
         run: node scripts/ci-native-service.mjs
+      - run: node scripts/ci-cross-platform.mjs produce cross-output
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: cross-${{ runner.os }}
+          path: cross-output/*.json
+          if-no-files-found: error
+          retention-days: 7
       - if: runner.os != 'Windows'
         run: bash -n scripts/install.sh scripts/ci-install-worker.sh
       - if: runner.os == 'Windows'
@@ -39,6 +46,30 @@ jobs:
         run: >-
           $null = [scriptblock]::Create(
           (Get-Content -Raw scripts/install.ps1))
+
+  cross-platform:
+    needs: client
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: cross-*
+          path: cross-input
+          merge-multiple: true
+      - run: node scripts/ci-cross-platform.mjs verify cross-input
 
   docker:
     runs-on: ubuntu-latest

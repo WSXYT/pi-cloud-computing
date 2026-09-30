@@ -1,0 +1,74 @@
+import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
+import { fileURLToPath } from "node:url";
+import test from "node:test";
+import { spawn } from "@lydell/node-pty";
+import { saveClientState } from "../src/client-state.js";
+import { CloudConnection } from "../src/client-network.js";
+import { createPairing } from "../src/worker/pairing.js";
+import { loadWorkerState, saveWorkerState } from "../src/worker/state.js";
+import { startWorkerServer } from "../src/worker/server.js";
+import type { TaskSpec } from "../src/protocol.js";
+
+// Real Pi's interactive mode through POSIX PTY / Windows ConPTY, not RPC or a mock editor.
+test("real terminal locks input, routes literal append, handles resize and releases the editor", { timeout: 60_000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-cloud-terminal-"));
+  const agentDir = join(root, "agent");
+  await mkdir(agentDir);
+  const worker = await startWorkerServer({ dataDir: join(root, "worker"), publicIp: "127.0.0.1", port: 0, piVersion: "0.85.1", nodeVersion: process.version, gitVersion: "git", enableExecution: false });
+  const state = await loadWorkerState(join(root, "worker"));
+  const pairing = createPairing(state);
+  await saveWorkerState(join(root, "worker"), state);
+  const connection = new CloudConnection(worker.url, state.certificateFingerprint!);
+  const paired = await connection.pair(pairing.code);
+  const sessionId = randomUUID();
+  const sessionFile = join(root, "session.jsonl");
+  await writeFile(sessionFile, JSON.stringify({ type: "session", version: 3, id: sessionId, timestamp: new Date().toISOString(), cwd: root }) + "\n");
+  const task: TaskSpec = { taskId: "terminal-task", projectId: root, prompt: "Terminal fixture", runner: "host", environment: { piVersion: "0.85.1", nodeVersion: "24", platform: process.platform, packages: [], resources: [], providers: [], secretVersions: [], warnings: [] }, git: { repositoryHash: "repo", head: "head", indexHash: "index", worktreeHash: "tree", includedPaths: [] }, session: { sessionId, baseLeafId: null, lastEntryId: null, entriesSha256: "empty" }, artifacts: [], secretIds: [] };
+  worker.tasks.create(task);
+  await saveClientState({ locale: "en", activeWorkerId: paired.workerId, connections: [{ ...paired, baseUrl: worker.url, fingerprint: state.certificateFingerprint!, pairedAt: new Date().toISOString() }], tasks: [{ ...task.session, taskId: task.taskId, workerId: paired.workerId, baseUrl: worker.url, fingerprint: state.certificateFingerprint!, projectId: root, cursor: 0, status: "queued", prompt: task.prompt, updatedAt: new Date().toISOString(), accepted: true }] }, join(agentDir, "pi-cloud.json"));
+  await writeFile(join(agentDir, "settings.json"), JSON.stringify({ packages: [], defaultProvider: "fixture", defaultModel: "stub", defaultProjectTrust: "trusted", quietStartup: true, disableInstallTelemetry: true, analytics: { enabled: false } }));
+  await writeFile(join(agentDir, "models.json"), JSON.stringify({ providers: { fixture: { api: "openai-completions", apiKey: "fixture", baseUrl: "http://127.0.0.1:1/v1", models: [{ id: "stub" }] } } }));
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key, value]) => value !== undefined && /^(path|pathext|systemroot|windir|comspec|temp|tmp|home|userprofile|appdata|localappdata|lang|lc_all)$/i.test(key))) as Record<string, string>;
+  const cli = fileURLToPath(new URL("./cli.js", import.meta.resolve("@earendil-works/pi-coding-agent")));
+  const terminal = spawn(process.execPath, [cli, "--no-extensions", "--no-skills", "--no-prompt-templates", "--no-themes", "-e", fileURLToPath(new URL("../../src/client.ts", import.meta.url)), "--session", sessionFile], { cwd: root, cols: 100, rows: 30, name: "xterm-256color", env: { ...env, TERM: "xterm-256color", PI_CODING_AGENT_DIR: agentDir, PI_CLOUD_CLIENT_STATE: join(agentDir, "pi-cloud.json") } });
+  let output = "";
+  let exited = false;
+  terminal.onData(data => { output += data; });
+  const exit = new Promise<void>(resolve => terminal.onExit(() => { exited = true; resolve(); }));
+  const until = async (predicate: () => boolean) => {
+    for (let n = 0; n < 200; n++) { if (predicate()) return; if (exited) break; await delay(50); }
+    assert.fail(`Terminal did not reach expected state:\n${output.slice(-12000)}`);
+  };
+  try {
+    await until(() => output.includes("F6"));
+    terminal.write("MUST_NOT_SEND\r");
+    await delay(300);
+    assert.equal(worker.tasks.exportState()[0]!.inputs.length, 0);
+    terminal.resize(45, 20);
+    terminal.resize(100, 30);
+    terminal.write("\x1b[17~"); // F6 (xterm / Windows Terminal).
+    await until(() => output.includes("Append instruction"));
+    terminal.write("\r");
+    await until(() => output.includes("Append mode"));
+    terminal.write("\x1b[200~/cloud-abort 中文 literal\x1b[201~");
+    await delay(150);
+    terminal.write("\r");
+    await until(() => worker.tasks.exportState()[0]!.inputs.length === 1);
+    assert.equal(worker.tasks.exportState()[0]!.inputs[0]!.message, "/cloud-abort 中文 literal");
+    assert.ok(["queued", "running"].includes(worker.tasks.exportState()[0]!.status), "literal slash input must not abort the task through a local cloud command");
+    worker.tasks.settle(task.taskId, "completed");
+    await until(() => output.includes("input area is released"));
+    terminal.write("LOCAL_DRAFT");
+    await until(() => output.includes("LOCAL_DRAFT"));
+  } finally {
+    terminal.kill();
+    await Promise.race([exit, delay(3000)]);
+    await worker.close();
+    await rm(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+  }
+});

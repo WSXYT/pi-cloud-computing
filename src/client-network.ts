@@ -229,7 +229,7 @@ export class CloudConnection {
       `${this.baseUrl.replace(/^https:/, "wss:")}/events`,
       {
         agent: this.agent,
-        handshakeTimeout: 30_000,
+        handshakeTimeout: 10_000,
         maxPayload: 50 * 1024 * 1024,
         headers: { authorization: `Bearer ${this.token}` },
       },

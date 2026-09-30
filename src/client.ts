@@ -23,7 +23,7 @@ import { CloudConnection, normalizeFingerprint } from "./client-network.js";
 import { remoteEventView, safeDisplayText } from "./client-events.js";
 import { selectSyncItems, type SyncPreflightItem } from "./client-preflight.js";
 import { selectCloudMenu, type CloudMenuItem } from "./client-menu.js";
-import { loadClientState, updateClientState, type CloudClientState, type CloudTaskState } from "./client-state.js";
+import { CLOUD_SHORTCUTS, loadClientState, updateClientState, type CloudClientState, type CloudTaskState } from "./client-state.js";
 import { PROTOCOL_VERSION } from "./version.js";
 
 interface ActiveTask {
@@ -35,6 +35,7 @@ interface ActiveTask {
   followUp: boolean;
   reconnectAttempt: number;
   reconnectTimer?: ReturnType<typeof setTimeout>;
+  connectionTimer?: ReturnType<typeof setTimeout>;
   retryBlocked: boolean;
   preview: string;
   seen: Set<number>;
@@ -65,7 +66,9 @@ function nativeSessionPath(directory: string, id: string): string {
 export default async function piCloudExtension(pi: ExtensionAPI): Promise<void> {
   let state = await loadClientState();
   let locale = detectLocale(state.locale);
-  const tr = (key: MessageKey, params: Record<string, string | number> = {}) => translate(locale, key, params);
+  const shortcut = state.shortcut ?? "f6";
+  const tr = (key: MessageKey, params: Record<string, string | number> = {}) => translate(locale, key, { shortcut: shortcut.toUpperCase(), ...params });
+  let abortWaitTimer: ReturnType<typeof setTimeout> | undefined;
   let active: ActiveTask | undefined;
   let lastResult: CloudTaskState | undefined;
   let shuttingDown = false;
@@ -73,6 +76,7 @@ export default async function piCloudExtension(pi: ExtensionAPI): Promise<void> 
   let submissionAbort: AbortController | undefined;
   let editorContext: ExtensionContext | undefined;
   let ownEditor: ReturnType<ExtensionContext["ui"]["getEditorComponent"]>;
+  let previousEditor: typeof ownEditor;
   const editorState: CloudEditorState = { locked: false, append: false, status: undefined };
   const setCloudStatus = (ctx: ExtensionContext, text: string | undefined): void => {
     editorState.status = text;
@@ -81,7 +85,8 @@ export default async function piCloudExtension(pi: ExtensionAPI): Promise<void> 
   };
   const installEditor = (ctx: ExtensionContext): void => {
     editorContext = ctx;
-    if (ctx.mode !== "tui" || ctx.ui.getEditorComponent()) return;
+    if (ctx.mode !== "tui" || (ownEditor && ctx.ui.getEditorComponent() === ownEditor)) return;
+    previousEditor = ctx.ui.getEditorComponent();
     ownEditor = (tui, theme, keybindings) => new CloudEditor(tui, theme, keybindings, () => editorState,
       (text) => editorContext!.ui.theme.fg("accent", text), () => {
         if (!active || !editorContext) return;
@@ -91,8 +96,9 @@ export default async function piCloudExtension(pi: ExtensionAPI): Promise<void> 
     ctx.ui.setEditorComponent(ownEditor);
   };
   const removeEditor = (ctx: ExtensionContext): void => {
-    if (ownEditor && ctx.ui.getEditorComponent() === ownEditor) ctx.ui.setEditorComponent(undefined);
+    if (ownEditor && ctx.ui.getEditorComponent() === ownEditor) ctx.ui.setEditorComponent(previousEditor);
     ownEditor = undefined;
+    previousEditor = undefined;
     editorContext = undefined;
   };
   let wizardOpen = false;
@@ -158,7 +164,7 @@ export default async function piCloudExtension(pi: ExtensionAPI): Promise<void> 
     const info = statusText(task.state);
     editorState.locked = true;
     editorState.append = task.followUp;
-    setCloudStatus(ctx, task.followUp ? tr("cloud.appendReady") : `F6 · ${info}`);
+    setCloudStatus(ctx, task.followUp ? tr("cloud.appendReady") : `${shortcut.toUpperCase()} · ${info}`);
     if (ctx.mode === "tui" && ownEditor && ctx.ui.getEditorComponent() === ownEditor) return;
     ctx.ui.setWidget("pi-cloud", [
       `☁ Pi Cloud · ${info}`,
@@ -168,6 +174,8 @@ export default async function piCloudExtension(pi: ExtensionAPI): Promise<void> 
     ]);
   };
   const clearTaskUi = (ctx: ExtensionContext): void => {
+    clearTimeout(abortWaitTimer);
+    abortWaitTimer = undefined;
     editorState.locked = false;
     editorState.append = false;
     setCloudStatus(ctx, undefined);
@@ -187,6 +195,8 @@ export default async function piCloudExtension(pi: ExtensionAPI): Promise<void> 
     task.generation++;
     if (task.reconnectTimer) clearTimeout(task.reconnectTimer);
     delete task.reconnectTimer;
+    clearTimeout(task.connectionTimer);
+    delete task.connectionTimer;
     task.uiAbort.abort();
     task.socket?.terminate();
     task.socket = undefined;
@@ -260,6 +270,8 @@ export default async function piCloudExtension(pi: ExtensionAPI): Promise<void> 
     task.state.accepted = true;
     task.accepted = true;
     task.reconnectAttempt = 0;
+    clearTimeout(task.connectionTimer);
+    delete task.connectionTimer;
     if (snapshot.result) completeFromResult(task, snapshot.result);
     for (const request of snapshot.uiRequests ?? []) requestUi(task, parseTaskUiRequest(request), ctx);
     if (TERMINAL.has(snapshot.status) && !snapshot.finalizing) {
@@ -282,6 +294,8 @@ export default async function piCloudExtension(pi: ExtensionAPI): Promise<void> 
       task.state.finalizing = TERMINAL.has(frame.status);
       if (TERMINAL.has(frame.status)) delete task.state.pendingAbort;
       task.reconnectAttempt = 0;
+      clearTimeout(task.connectionTimer);
+      delete task.connectionTimer;
       if (first) ctx.ui.notify(tr("cloud.started", { taskId: task.state.taskId }), "info");
       checkpoint(task.state, ctx);
       sendOutbox(task);
@@ -331,7 +345,8 @@ export default async function piCloudExtension(pi: ExtensionAPI): Promise<void> 
   };
   const scheduleReconnect = (task: ActiveTask, ctx: ExtensionContext): void => {
     if (active !== task || task.reconnectTimer || shuttingDown || task.retryBlocked) return;
-    const delay = Math.min(30_000, 1_000 * 2 ** Math.min(6, task.reconnectAttempt++));
+    const delay = Math.min(8_000, 1_000 * 2 ** Math.min(6, task.reconnectAttempt++));
+    setCloudStatus(ctx, tr("cloud.reconnectProgress", { attempt: task.reconnectAttempt }));
     task.reconnectTimer = setTimeout(() => {
       delete task.reconnectTimer;
       void connectTask(task, ctx).catch((error: unknown) => connectionFailed(task, ctx, error));
@@ -341,6 +356,7 @@ export default async function piCloudExtension(pi: ExtensionAPI): Promise<void> 
   const connectionFailed = (task: ActiveTask, ctx: ExtensionContext, error: unknown): void => {
     if (active !== task || shuttingDown) return;
     if (task.retryBlocked) return;
+    disconnect(task);
     const rejected = /CERTIFICATE_MISMATCH|AUTH_|401|403|invalid protocol/i.test(detail(error));
     task.retryBlocked = rejected || task.reconnectAttempt >= 5;
     if (task.retryBlocked) {
@@ -361,6 +377,10 @@ export default async function piCloudExtension(pi: ExtensionAPI): Promise<void> 
     task.uiSeen.clear();
     task.sentInputs.clear();
     delete task.pendingSnapshot;
+    task.connectionTimer = setTimeout(() => {
+      if (active === task && task.generation === generation) connectionFailed(task, ctx, new Error("CONNECTION_TIMEOUT"));
+    }, 10_000);
+    task.connectionTimer.unref();
     const socket = await task.connection.openEvents((frame) => {
       if (active !== task || task.generation !== generation || shuttingDown) return;
       if (frame.type === "hello_ack") {
@@ -372,7 +392,11 @@ export default async function piCloudExtension(pi: ExtensionAPI): Promise<void> 
           task.connection.send(task.socket, { type: "task_create", task: task.state.spec });
         else resumeTail(task);
       } else handleFrame(task, frame, ctx);
+    }).catch((error: unknown) => {
+      if (active === task && task.generation === generation && !shuttingDown) throw error;
+      return undefined;
     });
+    if (!socket) return;
     if (active !== task || generation !== task.generation || shuttingDown) { socket.terminate(); return; }
     task.socket = socket;
     let alive = true;
@@ -473,6 +497,17 @@ export default async function piCloudExtension(pi: ExtensionAPI): Promise<void> 
     const task = active;
     if (!task) throw new Error(tr("cloud.noTask"));
     task.state.pendingAbort = true;
+    if (!abortWaitTimer) {
+      abortWaitTimer = setTimeout(() => {
+        if (active !== task) return;
+        disconnect(task);
+        active = undefined;
+        lastResult = task.state;
+        clearTaskUi(ctx);
+        ctx.ui.notify(tr("cloud.abortUnconfirmed"), "warning");
+      }, 30_000);
+      abortWaitTimer.unref();
+    }
     await persistTask(task.state);
     if (task.socket?.readyState === 1) sendOutbox(task);
     else { task.retryBlocked = false; await connectTask(task, ctx).catch((error: unknown) => connectionFailed(task, ctx, error)); }
@@ -658,7 +693,7 @@ export default async function piCloudExtension(pi: ExtensionAPI): Promise<void> 
   register("cloud-submit", "cloud.submitDescription", submitTask);
 
   if (typeof pi.registerShortcut === "function") {
-    pi.registerShortcut("f6", {
+    pi.registerShortcut(shortcut, {
       description: tr("cloud.submitDescription"),
       handler: async (ctx) => {
         if (submitting) {
@@ -698,6 +733,17 @@ export default async function piCloudExtension(pi: ExtensionAPI): Promise<void> 
     if (!ctx.hasUI || !(await ctx.ui.confirm(tr("cloud.retryChoice"), tr("cloud.retryConfirm")))) return;
     ctx.ui.notify(tr("cloud.retryStarting", { taskId: failed.taskId }), "info");
     await submitTask(failed.prompt, ctx, selected.record.workerId);
+  });
+
+  register("cloud-shortcut", "cloud.shortcutChoice", async (_args, ctx) => {
+    requireIdle(ctx);
+    if (active || submitting) throw new Error(tr("cloud.taskActive", { taskId: active?.state.taskId ?? "…" }));
+    if (!await ctx.ui.confirm(tr("cloud.shortcutChoice"), tr("cloud.shortcutConfirm"))) return;
+    const selected = await ctx.ui.select(tr("cloud.shortcutChoice"), [...CLOUD_SHORTCUTS]);
+    const key = CLOUD_SHORTCUTS.find(item => item === selected);
+    if (!key || key === shortcut) return;
+    await persistState(value => ({ ...value, shortcut: key }));
+    await ctx.reload();
   });
 
   register("cloud-reconnect", "cloud.reconnectDescription", async (_args, ctx) => {
@@ -963,6 +1009,7 @@ export default async function piCloudExtension(pi: ExtensionAPI): Promise<void> 
           if (tasksFor(ctx).length) add("cloud-tasks", "cloud.historyChoice", "cloud.historyDescription");
           add("cloud-help", "cloud.helpChoice", "cloud.helpDescription");
           add("cloud-language", "cloud.languageChoice", "cloud.languageDescription");
+          add("cloud-shortcut", "cloud.shortcutChoice", "cloud.shortcutChoice");
           add("back", "cloud.back");
           choice = await selectCloudMenu(ctx, tr("cloud.more"), [], more, tr("cloud.menuHelp"));
           if (!choice || choice === "back") continue;

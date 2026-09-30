@@ -1,380 +1,170 @@
 # Pi Cloud Computing
 
-在自托管 Linux VPS 上继续运行本地 Pi 会话和 Git 工作区，并把代码与原生 session 结果安全带回本地。
+把本地 Pi 会话和 Git 工作区交给自托管 Worker 执行，再安全接回文件与原生对话。
+Run your Pi session and Git workspace on a self-hosted Worker, then safely receive files and the native conversation.
 
-Run a local Pi session and Git workspace on a self-hosted Linux VPS, then safely bring the code and native session results back.
-
-[简体中文](#简体中文) | [English](#english)
-
----
+[简体中文](#简体中文) · [English](#english) · [验收 / Acceptance](ACCEPTANCE.md) · [Release checklist](RELEASING.md)
 
 ## 简体中文
 
-### 你需要什么
+### 两台电脑，两个明确角色
 
-- 本地电脑：Windows、Linux 或 macOS。
-- 云端服务器：带公网 IP 的 Linux VPS，推荐 Ubuntu 24.04。
-- 项目必须是已有至少一个 commit 的 Git 仓库。
-- 安装器会检查 Node.js 24、Git 和 Pi；已有 Pi 时不会重复安装。
-- Worker 默认建议先使用 `host` 模式试用；需要更强隔离时可选择 Docker。
+- **本地电脑**安装 Pi 插件，负责输入、授权和接收结果。
+- **服务器**安装 Worker，负责后台执行。Windows、macOS、Linux 都可原生运行，**不依赖 Docker**。
+- 需要 Node.js **24.x**、Git、Pi（当前验证 **0.85.1**）。项目必须是至少有一个 commit 的 Git 仓库。
+- 服务器需有本地电脑可访问的 IP，并允许 TCP **9443**；不一定要公网 IP，局域网/VPN 也可以。
+- 原生 `host` 模式使用服务账号权限执行代码，不是安全沙箱。只连接自己信任的服务器；只同步信任的插件和依赖。
 
-### 最简单的安装方式
+### 推荐：先装服务器，再复制本地连接命令
 
-安装器会依次询问：
-
-1. 使用简体中文还是 English。
-2. 安装本地 Pi 插件、Linux Worker，还是两者都安装。
-3. Worker 对外 IP，自动显示检测到的公网 IP 和内网 IP。
-4. Worker 使用 host 还是 Docker runner；Docker 是否允许访问模型 API 和安装依赖。
-5. UFW 已启用时，是否放行 TCP 9443。
-
-#### Windows 本地电脑
-
-在 PowerShell 中运行：
-
-```powershell
-irm https://raw.githubusercontent.com/WSXYT/pi-cloud-computing/main/scripts/install.ps1 | iex
-```
-
-选择“简体中文”和“本地电脑：Pi 插件”。安装完成后重启 Pi，或在 Pi 中输入：
-
-```text
-/reload
-/cloud
-```
-
-#### Linux 或 macOS 本地电脑
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/WSXYT/pi-cloud-computing/main/scripts/install.sh | bash
-```
-
-选择“简体中文”和“本地电脑：Pi 插件”。
-
-#### Linux VPS Worker
-
-在 VPS 中运行同一条交互式安装命令：
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/WSXYT/pi-cloud-computing/main/scripts/install.sh | bash
-```
-
-选择“简体中文”和“Linux VPS：云端 Worker”。也可以无交互安装：
+**Linux / macOS 服务器**（将 `SERVER_IP` 换成可访问的 IP）：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/WSXYT/pi-cloud-computing/main/scripts/install.sh \
-  | bash -s -- --worker --lang zh-CN --ip 149.88.93.8 --runner host --yes
+  | bash -s -- --worker --lang zh-CN --ip SERVER_IP --yes
 ```
 
-安装结束会打印一整行命令，例如：
-
-```text
-/cloud-pair https://149.88.93.8:9443 SHA256指纹 一次性配对码
-```
-
-在本地 Pi 输入 `/cloud`，选择“已经安装好：粘贴配对命令”，粘贴这一整行即可。也保留直接执行 `/cloud-pair ...` 的快捷方式。
-
-### 先装客户端，还是先装服务器？
-
-两种顺序都可以：
-
-- **先装服务器：** 安装结束保存 `/cloud-pair ...` 整行，之后在本地安装插件并粘贴。
-- **先装客户端：** 在 `/cloud` 中选择“还没有 Worker：查看一键安装”，在 VPS 执行显示的命令，回来继续配对。
-
-### 本地 `/cloud` 使用流程
-
-输入：
-
-```text
-/cloud
-```
-
-只需记住这一个入口；TUI 根据当前状态引导下一步：
-
-| 当前状态 | 主要操作 |
-|---|---|
-| 未配对 | 已安装则粘贴配对命令；未安装则查看 VPS 安装指引 |
-| 已配对、项目首次使用 | 首次在云端运行此项目 |
-| 任务运行中 | 返回对话查看输出、重连、中止（需确认） |
-| 任务失败 | 重新提交，保留原记录并重新确认授权 |
-| 结果返回 | 先审阅文件，再接回对话；各自确认，原会话保留 |
-
-“更多设置与历史任务”提供服务器切换、凭据撤销、历史任务、帮助与语言。每个子页面可返回；不需要记忆底层命令。
-
-### 提交任务
-
-在已有 commit 的 Git 项目中启动 Pi，输入 `/cloud`，选择“首次在云端运行此项目”（后续为“提交当前会话”）。无需在服务器手动克隆项目。
-
-1. **任务**：填写希望云端完成的工作。
-2. **同步**：查看本地仓库路径、目标服务器、Git HEAD，以及下面的同步清单。云端使用独立任务副本，不覆盖本地目录。
-3. **确认并启动**：检查同步范围、执行权限和凭据授权。拒绝确认会返回同步清单并保留选择；在清单退出则取消提交。
-
-项目归档包含 Git 历史、已跟踪文件改动和未被忽略的新文件。未跟踪且被忽略的文件不上传；**已提交到 Git 的秘密仍在历史中，不会因取消凭据授权而被移除**。
-
-同步清单：
-
-- `Pi 运行环境`：插件及本地包、skills、prompts、themes 和已脱敏的 Provider 配置；不是只上传摘要。
-- `Git 工作区`：完整 Git bundle 加未提交和已选择的未跟踪文件；远程执行必需。
-- `当前对话`：Pi 原生 JSONL session；可取消选择以启动新云端会话。
-- `Pi Provider 凭据`：检测到 `auth.json`、配置密钥或引用的环境变量时显示，包含敏感内容，默认不选。
-
-按键：
-
-```text
-↑↓ 移动    空格多选    Enter 确认    Esc 取消
-```
-
-“下一步：检查并确认”本身不上传；只有最后确认后才会上传和启动。选择凭据时，数据通过已固定证书的 TLS 传输，在 Worker 端使用 AES-256-GCM 加密保存，执行时临时解密，结束后删除临时明文。
-
-任务运行时，普通输入会发送到云端 Pi 的 `steer` 或 `followUp` 队列。管理命令：
-
-```text
-/cloud-status
-/cloud-reconnect
-/cloud-abort
-```
-
-### 上传中断或任务失败后
-
-- 仍在运行但连接断开：使用 `/cloud-reconnect`，继续接收同一个任务，避免重复执行。
-- 已失败：从 `/cloud` 选择“重新提交上次失败的任务”，或输入 `/cloud-retry`。重启 Pi 后也可通过 `pi -c` 回到原会话再重试。
-- 重试保留失败记录，使用相同提示向**原 Worker 创建新任务**，重新检查当前项目、对话和同步范围。凭据仍须显式选择与确认；不会沿用上次授权。
-- 环境、项目和对话归档分别按内容哈希复用；只有 Worker 确认已有相同内容时才跳过上传。内容已变化时重新上传。重试不是恢复原执行点，远端已执行的外部操作可能再次发生。
-
-### 获取结果
-
-完成事件会包含 Git result 和原生 session artifact：
-
-```text
-/cloud-apply
-/cloud-merge
-```
-
-`/cloud-apply` 会先重新计算本地 Git baseline。本地内容在提交后发生变化时，它会拒绝覆盖。
-
-`/cloud-merge` 校验原生 entry ID 和 parentId，生成合并后的 JSONL session，再使用 Pi 的 `switchSession` API 切换。
-
-### Worker 日常操作
-
-以下命令均在 VPS 运行。稳定入口是编译后的 CLI：
-
-```bash
-CLI="$HOME/.pi-cloud/source/dist/src/cli.js"
-NODE="$(command -v node)"
-```
-
-查看状态：
-
-```bash
-$NODE $CLI worker status
-systemctl status pi-cloud-worker --no-pager
-$NODE $CLI worker health
-```
-
-查看检测到的公网/内网 IP：
-
-```bash
-$NODE $CLI worker ips
-```
-
-服务运行时生成新的十分钟一次性配对码，无需重启：
-
-```bash
-$NODE $CLI worker pair
-```
-
-它会再次打印完整 `pair-command=/cloud-pair ...`。
-
-查看和撤销客户端 token：
-
-```bash
-$NODE $CLI worker tokens
-$NODE $CLI worker token revoke TOKEN_ID
-```
-
-清理过期任务：
-
-```bash
-$NODE $CLI config set retention-days 30
-$NODE $CLI worker cleanup
-```
-
-查看日志：
-
-```bash
-journalctl -u pi-cloud-worker -n 200 --no-pager
-journalctl -u pi-cloud-worker -f
-```
-
-### 更新
-
-本地或 VPS 都可以重新运行同一条安装命令。源码只做 fast-forward 更新；遇到本地修改、分叉提交或非 Git 目录会停止，不会抹掉数据。现有连接、任务、token、证书和配置会保留；损坏的状态文件会报错而不是被清空。Worker 必须通过固定证书的本机健康检查，才会报告安装就绪。
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/WSXYT/pi-cloud-computing/main/scripts/install.sh | bash
-```
-
-Windows 本地更新：
+**Windows 服务器**：在管理员 PowerShell 下载并运行安装器。`SERVER_IP` 必须换成实际 IP。
 
 ```powershell
-irm https://raw.githubusercontent.com/WSXYT/pi-cloud-computing/main/scripts/install.ps1 | iex
+$p = Join-Path $env:TEMP ("pi-cloud-" + [guid]::NewGuid() + ".ps1")
+try {
+  Invoke-WebRequest https://raw.githubusercontent.com/WSXYT/pi-cloud-computing/main/scripts/install.ps1 -OutFile $p
+  & $p -Role worker -Language zh-CN -Ip SERVER_IP
+} finally { Remove-Item $p -ErrorAction SilentlyContinue }
 ```
 
-### 常见问题
+安装器检查依赖、保留已有配置、注册后台服务，并通过固定证书的本机健康检查。**成功后才生成十分钟有效的一次性配对码**，同时打印：
 
-#### `CERTIFICATE_MISMATCH`
+- `client-command-posix=`：复制后面的命令到本地 macOS / Linux 终端。
+- `client-command-powershell=`：复制后面的命令到本地 Windows PowerShell。
 
-不要绕过。它表示本地保存的证书 pin 与当前 TLS 证书不一致。确认 VPS 没有被替换后，在本地执行 `/cloud-unpair`，在 VPS 执行 `worker pair`，再粘贴新的完整配对命令。证书本身变化时需要重新安装或明确轮换证书后再配对。
+这两条命令自动安装/检测插件并配置连接；不需要逐项填写地址、指纹和配对码。命令固定到服务器的源码 commit。非干净官方 Git checkout 不会生成不可验证的安装链接，此时会提供 `/cloud-pair ...` 作为手动连接方式。
 
-#### 连接不到 9443
+配对命令包含短期秘密，**不要贴进聊天、issue 或公开日志**。若过期，在服务器重新运行 `worker pair`。
 
-```bash
-systemctl is-active pi-cloud-worker
-ss -ltnp | grep 9443
-ufw allow 9443/tcp
-$NODE $CLI worker health
+已有 Pi 窗口执行 `/reload`；新开 Pi 直接开始。若先安装了本地插件，进入 `/cloud`，粘贴服务器生成的完整 `/cloud-pair ...` 即可。安装器只提供“本地插件”或“服务器”两个角色，不提供混合安装选项。
+
+> `main` 链接安装主分支。开发/验收分支不等于已发布版本；生产更新前核对 [ACCEPTANCE.md](ACCEPTANCE.md) 和对应 commit 的 CI。
+
+### 日常使用
+
+在输入区写下任务：
+
+| 操作 | 行为 |
+|---|---|
+| 空闲时 **Enter** | 正常交给本地 Pi |
+| 空闲时 **F6** | 将当前输入作为云端任务，打开上传范围与授权确认 |
+| 准备/上传时 **F6** | 取消实际请求，恢复原输入 |
+| 云端运行时 | 输入区显示进度并默认锁定，不会把普通输入偷偷发给云端 |
+| 运行时 **F6 → 追加指令** | 明确进入追加模式；Enter 只发送给当前云端任务 |
+| 追加时 **Esc** | 返回进度，保留未发送的草稿 |
+| 完成/失败后 | 释放输入区；普通 Enter 可继续本地，不必先处理结果 |
+
+追加模式中的 `/cloud-abort ...`、其他 `/...` 或 `!...` **按文字发送**，不会被误当成本地管理命令。F6 菜单也提供返回本地、停止、重连。远程工具需要确认时会显示原生 Pi 对话框。
+
+默认快捷键是 F6。若终端或其他扩展占用该键，先检查 `/hotkeys`，在 **`/cloud → 更多 → 云端快捷键`** 选择未使用的 F6–F12。保存后重新加载扩展，实际注册的按键同步显示在 `/hotkeys`。
+
+### 一次清晰的上传授权
+
+同步清单支持方向键移动、空格切换、Enter 进入确认、Esc 取消：
+
+- **Git 工作区**：必需；Git 历史、已跟踪文件改动和选中的非忽略新文件。
+- **Pi 运行环境**：插件、本地包、skills、prompts、themes 与已脱敏 Provider 配置。
+- **当前对话**：可取消，改为新建云端会话。
+- **Pi Provider 凭据**：检测到时显示，**默认不选**，必须明确授权。
+
+清单和“下一步”不会上传。最后确认才会传输；拒绝返回清单，退出保留草稿。每个任务使用独立副本，不要求手动在服务器克隆项目。
+
+**Git 历史里已提交的秘密仍会随仓库上传**，取消凭据选项不会删除这些历史。授权凭据通过固定证书的 TLS 发送，在 Worker 加密存储，执行时临时解密，结束后清理明文；可通过 `/cloud` 撤销存储的凭据。
+
+### 断线、取消与重试
+
+- **上传取消**：`/cloud-cancel` 或上传中的 F6；中断网络请求，恢复草稿。
+- **连接中断**：最多自动重连 5 次，单次等待不超过 10 秒，完整本地等待不超过 90 秒；随后释放输入。`/cloud-reconnect` 查询并恢复**原任务**。
+- **停止未确认**：`/cloud-abort` 请求远端停止；30 秒无确认便释放本地输入，**不会谎报任务已停止**。稍后重连查询。
+- **结果下载无进展**：30 秒结束等待，可再次获取。
+- **任务失败**：`/cloud-retry` 在原 Worker 创建**新任务**，保留旧记录，重新确认同步范围和凭据。它不是恢复执行点，之前的外部操作可能重复。
+
+这些超时只结束本地等待，不决定服务器任务结果。历史任务、错误详情和恢复入口保留在 `/cloud`，不长期占用标题。
+
+### 查看并接收结果
+
+`/cloud → 查看并接收云端结果`（或 `/cloud-receive`）统一处理文件与对话，只确认一次：
+
+1. 校验本地 Git baseline；提交后文件改变则拒绝覆盖。
+2. 应用文件，保留可审阅的补丁和原始结果。
+3. 校验会话 entry ID、父子关系与提交时的对话副本，创建并切换到新的原生 Pi 会话。
+
+提交后继续在本地输入的对话会保留。原会话、提交时副本、结果文件及恢复材料不会被覆盖。文件成功而对话未完成时，重新接收仅重做未完成部分。也可以稍后处理结果，继续本地。
+
+`/cloud-apply` 和 `/cloud-merge` 保留兼容，分别接收文件与对话。
+
+### 服务管理与更新
+
+源码安装后的 CLI 为 `~/.pi-cloud/source/dist/src/cli.js`；Windows 对应 `$HOME\.pi-cloud\source\dist\src\cli.js`：
+
+```text
+node <CLI路径> worker status
+node <CLI路径> worker health
+node <CLI路径> worker pair
+node <CLI路径> worker start
+node <CLI路径> worker stop
+node <CLI路径> worker tokens
+node <CLI路径> worker token revoke TOKEN_ID
 ```
 
-还需要在云服务商安全组中放行 TCP 9443。
+| 系统 | 原生后台托管 | 日志/注意事项 |
+|---|---|---|
+| Linux | systemd `pi-cloud-worker.service` | `journalctl -u pi-cloud-worker`；启停需要 sudo |
+| macOS | 用户 launchd `com.wsxyt.pi-cloud-worker` | `~/.pi-cloud/worker.log`；用户登录时加载，不依赖原终端窗口 |
+| Windows | Task Scheduler `PiCloudWorker`，S4U、最低权限 | `~/.pi-cloud/worker.log`；注册需要适当权限；无需保持交互登录；S4U 不提供网络共享/域凭据 |
 
-#### `Git required` 或 `HEAD` 不存在
+重跑相同角色安装器即可更新：只做 fast-forward，不重置有修改/分叉的 checkout，不清空现有连接、任务、证书或 token。固定 commit 安装遇到不同版本会要求独立源码目录，不会偷偷切换已有源码。损坏的状态会报错并保留原文件。
 
-项目必须先创建至少一个 commit：
+Windows 私有写入在 ACL 设置失败时拒绝保存。不要绕过 `CERTIFICATE_MISMATCH`：先核对服务器身份，再明确解除旧配对并重新连接。9443 不通时检查后台服务、系统防火墙及云服务商安全组。
 
-```bash
-git init
-git add .
-git commit -m "initial"
-```
-
-#### 云端没有 Provider 凭据
-
-重新提交，并在多选清单中主动勾选“Pi Provider 凭据”。它默认关闭，不会静默上传。
-
-#### host 和 Docker 如何选择
-
-- `host`：最容易试用，Pi 使用 systemd 服务账号权限运行。
-- `docker`：只读根文件系统，挂载本任务的工作区与临时运行环境。安装器会询问是否允许网络访问；模型 API 和依赖安装需要明确允许 `bridge`。无交互安装必须提供 `--docker-network bridge` 或 `none`，不会默认授权出网。
-
-### 安全边界
-
-- Pi 扩展和 Worker 都会执行代码，应只从你信任的仓库安装。
-- TLS 使用带 IP SAN 的自签名证书，本地固定 SHA-256 指纹。
-- 配对码十分钟有效且只能使用一次。
-- token 可在 Worker 上单独撤销。
-- 凭据不会默认上传。
-- Git 结果不会直接覆盖本地工作区。
-- 赞助商和中转推荐位目前仅为关闭状态的占位符，不接触任何任务数据。
-
----
+Docker 是 Linux 上的可选隔离模式，不是三平台原生 Worker 的前提。显式使用 `--runner docker --docker-network bridge` 或 `none`；访问模型 API/安装依赖需要明确允许网络。
 
 ## English
 
-### Requirements
+### Install the server, then connect your local computer
 
-- Local computer: Windows, Linux, or macOS.
-- Worker: a Linux VPS with a public IP; Ubuntu 24.04 is recommended.
-- The project must be a Git repository with at least one commit.
-- The installer checks Node.js 24, Git, and Pi. It keeps an existing Pi installation.
-- Start with the `host` runner for the first trial; choose Docker for stronger isolation.
+There are two distinct roles: **local Pi extension** and **native Worker server**. Both support Windows, macOS and Linux. Native execution does **not require Docker**. Requirements: Node **24.x**, Git, Pi (verified with **0.85.1**), a repository with an initial commit, and a server IP reachable on TCP **9443** over your LAN, VPN or the Internet.
 
-### One-command installation
+On Linux/macOS, run the server command above with `--lang en` and your actual IP. On Windows, run the PowerShell example with `-Language en` from an administrator terminal. Only run installers from a source you trust.
 
-The installer asks for language, client/Worker role, detected public/private IP, runner mode, and UFW access.
+After dependency checks, service registration and a pinned local health check, the server prints **two ready-to-copy local commands**: POSIX and PowerShell. Run the appropriate command on your **local computer**. It detects/installs the extension and configures the connection automatically, pinned to the server's source commit. Pairing codes expire after ten minutes and are single-use. Do not publish the commands or codes.
 
-Windows client:
+Unverified/dirty source checkouts do not emit installer links; use a verified installation and the complete `/cloud-pair ...` line instead. A client-first installation can paste that line through `/cloud`. Existing Pi windows need `/reload`. Main-branch installer links are not a claim that a development candidate has been released.
 
-```powershell
-irm https://raw.githubusercontent.com/WSXYT/pi-cloud-computing/main/scripts/install.ps1 | iex
-```
+### Input and authorization
 
-Linux/macOS client or Linux Worker:
+- **Enter** stays local while idle. **F6** submits the editor draft to cloud preflight.
+- Review the Git workspace, runtime resources, conversation and optional credentials. Credentials are **off by default**. Only the final consent uploads anything.
+- During preparation/upload, **F6 cancels the request and restores the draft**.
+- During execution the input area shows progress and is locked by default. **F6 → Append instruction** explicitly enables remote input; Enter sends it, Esc preserves the draft and returns to progress.
+- Slash-prefixed and bang-prefixed instructions in append mode are sent **literally**, not interpreted as local commands. Remote authorization uses native Pi dialogs.
+- Completion/failure releases the editor; you may continue locally before receiving results.
+- Choose an unused F6–F12 through **`/cloud → More → Cloud shortcut`**. Check conflicts in `/hotkeys` first; saving reloads extensions and updates the actual registered shortcut.
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/WSXYT/pi-cloud-computing/main/scripts/install.sh | bash
-```
+Uploads contain an independent task copy. Runtime synchronization includes plugins/packages, skills, prompts, themes and redacted provider configuration. Git history can still contain committed secrets even when credential sharing is disabled. Explicitly authorized credentials are TLS-pinned, encrypted at rest, temporarily materialized for execution and cleaned up afterward; revoke them through `/cloud`.
 
-Non-interactive Worker example:
+### Recovery and results
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/WSXYT/pi-cloud-computing/main/scripts/install.sh \
-  | bash -s -- --worker --lang en --ip 149.88.93.8 --runner host --yes
-```
+Automatic reconnect is limited to **five retries**, **10 seconds per attempt**, **under 90 seconds total local waiting**. `/cloud-reconnect` resumes the original task. `/cloud-abort` releases local waiting after **30 seconds without confirmation**, without claiming the remote task stopped. Result retrieval times out after **30 seconds without progress**. History and error details remain available without monopolizing the title.
 
-At the end, the Worker prints one complete command:
+`/cloud-retry` creates a **new task on the original Worker**, preserves the failed record and requests fresh consent; external effects may repeat. `/cloud-cancel` cancels preparation/upload rather than merely hiding its UI.
 
-```text
-/cloud-pair https://149.88.93.8:9443 SHA256_FINGERPRINT ONE_TIME_CODE
-```
+Choose **View and receive remote results** in `/cloud`, or run `/cloud-receive`. One confirmation applies baseline-checked files and merges the native session. Local conversation added since submission is retained. Originals, review patches, submitted-session copies and result artifacts remain available. Repeating after partial success handles only unfinished phases. Local file changes prevent overwrite. `/cloud-apply` and `/cloud-merge` remain compatibility commands; receipt can be deferred while you work locally.
 
-Paste the complete line into local Pi. Either client-first or server-first installation works.
+### Operations and security
 
-### Local workflow
+Use `node <CLI> worker status|health|pair|start|stop`, where `<CLI>` is `~/.pi-cloud/source/dist/src/cli.js`. Linux uses systemd (sudo for service management), macOS uses a user launchd agent loaded at login, and Windows uses a least-privilege S4U scheduled task without an interactive-login requirement. Closing the installer terminal does not stop the Worker. macOS/Windows logs are in the Worker data directory's `worker.log`; Linux uses `journalctl -u pi-cloud-worker`.
 
-Restart Pi or enter `/reload`, then open:
+Native host tasks run with the service account's permissions, **not inside a security sandbox**. Windows S4U does not grant network-share/domain credentials. Linux Docker is an explicit optional isolation mode with explicit egress consent. Windows private writes fail closed on ACL setup failure. Never bypass certificate mismatches. Updates preserve state, refuse destructive checkout resets, and fail on corrupt recovery data rather than silently resetting it.
 
-```text
-/cloud
-```
-
-This is the only entry point you need to remember. Without a Worker it offers a server installation guide or pairing-command paste. After pairing, choose **Run this project in the cloud for the first time**. No manual server-side project clone is required.
-
-The guided submission has three steps: **task → sync selection → final confirmation**. It shows the local repository, destination and Git HEAD. **Next: review and confirm** uploads nothing; declining final consent returns to your selections. Cancelling the selection exits without submitting.
-
-The Worker creates a separate task copy. The project archive includes Git history, tracked changes and non-ignored new files; secrets already committed to Git are still included, even with credential authorization off.
-
-During execution the home screen offers output, reconnect and abort. When results arrive it prioritizes file review, then conversation merge. **More settings and task history** contains server/credential management, history, language and help. Subcommands below remain optional shortcuts.
-
-The preflight is a multi-select checklist. Use Up/Down, Space, Enter, and Escape. Git workspace is required; runtime environment and native session are selected by default but optional. The runtime archive contains plugins/packages, skills, prompts, themes and redacted provider configuration—not just metadata. Provider credentials appear when auth files, embedded keys or referenced environment variables are found, and are off by default.
-
-While the task runs, normal input goes to remote Pi through `steer` or `followUp`. Commands:
-
-```text
-/cloud-status
-/cloud-reconnect
-/cloud-abort
-/cloud-apply
-/cloud-merge
-```
-
-Git results are baseline-checked before application. Native session results are validated by entry ID and parentId before Pi switches sessions.
-
-### Interrupted uploads and retries
-
-- If the task is still active but disconnected, use `/cloud-reconnect` to resume the same task without duplicating execution.
-- For a failed task, choose **Retry the last failed task** in `/cloud`, or use `/cloud-retry`. After restarting Pi, use `pi -c` to return to its session first.
-- Retry retains the failed record and creates a **new task on the original Worker**, using the same prompt and the current project/conversation. Review the sync choices again; credential authorization is never carried forward automatically.
-- Environment, project and session archives are reused independently by content hash, only after the Worker confirms they exist. Changed content is uploaded again. This is not execution-point recovery: external actions already performed remotely may run again.
-
-### Worker operations
-
-```bash
-CLI="$HOME/.pi-cloud/source/dist/src/cli.js"
-NODE="$(command -v node)"
-
-$NODE $CLI worker status
-$NODE $CLI worker ips
-$NODE $CLI worker pair
-$NODE $CLI worker tokens
-$NODE $CLI worker token revoke TOKEN_ID
-journalctl -u pi-cloud-worker -f
-```
-
-`worker pair` works while the service is running and prints a complete copy-paste pairing command. Pairing codes expire after ten minutes and are single-use.
-
-### Update
-
-Run the same installer again. Source updates are fast-forward only: dirty checkouts, conflicting commits and non-Git directories are not overwritten. Language updates preserve paired connections and task recovery state; corrupt state stops installation instead of resetting it. The installer checks mandatory command exits, and the Worker must pass its pinned local health check before it reports readiness.
-
-### Troubleshooting
-
-- `CERTIFICATE_MISMATCH`: do not bypass it. Verify the VPS, unpair locally, generate a new pairing command, and pair again.
-- Port unavailable: check `systemctl`, `ss -ltnp`, UFW, and the VPS provider security group.
-- Missing Git `HEAD`: create an initial commit.
-- Missing provider auth: submit again and explicitly select Pi provider credentials.
-- `host` runs with the systemd service account permissions. Docker has a read-only root and mounts this task's workspace/runtime. The installer asks explicitly about egress; model APIs and dependency installation need `bridge`. Non-interactive Docker installs must pass `--docker-network bridge` or `none`.
-
-### Development and release gates
+### Development and acceptance
 
 ```bash
 npm ci
@@ -384,4 +174,4 @@ npm run pack:smoke
 npm audit --omit=dev
 ```
 
-`pack:smoke` installs a real tarball in an isolated consumer, checks the CLI and deployment assets, and loads the extension through real Pi RPC. GitHub Actions verifies Ubuntu/Windows/macOS clients, real host and Docker tasks, Worker image startup, and non-root sudo/systemd installation and restart. Release procedure: [RELEASING.md](https://github.com/WSXYT/pi-cloud-computing/blob/main/RELEASING.md).
+CI runs native clients and installed services on all three systems, real Pi task/tool/dialog/result flows, real PTY/ConPTY interaction, cross-platform artifact compatibility, package installation/loading, and Linux Docker execution. The PTY dependency is **development-only**. See [ACCEPTANCE.md](ACCEPTANCE.md) for evidence and scope, and [RELEASING.md](RELEASING.md) for exact-commit release gates. Skips and mocks are not platform acceptance. Sponsor/referral placeholders remain disabled and receive no task data.

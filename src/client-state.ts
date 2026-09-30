@@ -44,8 +44,11 @@ export interface CloudTaskState {
   error?: string;
 }
 
+export const CLOUD_SHORTCUTS = ["f6", "f7", "f8", "f9", "f10", "f11", "f12"] as const;
+
 export interface CloudClientState {
   locale?: Locale;
+  shortcut?: typeof CLOUD_SHORTCUTS[number];
   connections: CloudConnectionState[];
   activeWorkerId?: string;
   tasks?: CloudTaskState[];
@@ -118,6 +121,7 @@ export async function loadClientState(
       connections,
       ...(tasks.length > 0 ? { tasks } : {}),
     };
+    if (value.shortcut && CLOUD_SHORTCUTS.includes(value.shortcut)) result.shortcut = value.shortcut;
     if (value.locale === "en" || value.locale === "zh-CN")
       result.locale = value.locale;
     if (typeof value.activeWorkerId === "string")
