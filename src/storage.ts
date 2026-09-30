@@ -21,7 +21,9 @@ async function windowsSid(): Promise<string> {
 async function secureWindowsPath(path: string, directory = false): Promise<void> {
   if (process.platform !== "win32") return;
   const sid = await windowsSid();
-  await execFileAsync(systemTool("icacls.exe"), [path, "/inheritance:r", "/grant:r", `*${sid}:${directory ? "(OI)(CI)F" : "F"}`, ...(directory ? ["/T"] : [])], { windowsHide: true });
+  // Directory inheritance applies to new children; never strip existing children's
+  // inherited ACEs with /T. Private files receive their own explicit grant on write.
+  await execFileAsync(systemTool("icacls.exe"), [path, "/inheritance:r", "/grant:r", `*${sid}:${directory ? "(OI)(CI)F" : "F"}`], { windowsHide: true });
 }
 
 export async function ensurePrivateDirectory(path: string): Promise<void> {

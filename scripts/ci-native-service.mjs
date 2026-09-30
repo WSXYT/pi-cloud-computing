@@ -60,7 +60,7 @@ try {
   await cloud('client', 'pair', ...args);
   console.log('PASS: installer exit, native background health, pairing/repeat, stop, restart, identity preservation');
 } catch (error) {
-  console.error(await readFile(join(env.PI_CLOUD_DATA_DIR, 'worker.log'), 'utf8').catch(() => 'Worker log not created'));
+  console.error(await readFile(join(env.PI_CLOUD_DATA_DIR, 'worker.log'), 'utf8').catch(error => `Worker log unavailable: ${error.code ?? 'READ_FAILED'}`));
   if (process.platform === 'darwin') console.error((await run('launchctl', ['print', `gui/${process.getuid()}/com.wsxyt.pi-cloud-worker`]).catch(e => ({ stdout: e.message }))).stdout);
   if (process.platform === 'win32') console.error((await run('schtasks.exe', ['/Query', '/TN', 'PiCloudWorker', '/V', '/FO', 'LIST']).catch(e => ({ stdout: e.message }))).stdout);
   if (process.platform === 'win32') {
