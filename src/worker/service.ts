@@ -96,7 +96,7 @@ export function renderWindowsWorkerScript(options: WindowsWorkerScriptOptions): 
 export function renderWindowsTask(dataDir: string): string {
   const script = windowsWorkerScriptPath(dataDir);
   windowsQuote(script);
-  return `<?xml version="1.0" encoding="UTF-8"?>
+  return `<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <Triggers><BootTrigger><Enabled>true</Enabled></BootTrigger></Triggers>
   <Principals><Principal id="Worker"><UserId>${plistQuote(userInfo().username)}</UserId><LogonType>S4U</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>

@@ -182,7 +182,7 @@ export async function runWorkerCli(args: string[], stdout = console.log): Promis
         else if (process.platform === "win32") {
           const script = await writeWindowsWorkerScript(config.dataDir);
           const taskXml = join(config.dataDir, "worker-task.xml");
-          await writePrivateFile(taskXml, renderWindowsTask(config.dataDir));
+          await writePrivateFile(taskXml, Buffer.from(`\uFEFF${renderWindowsTask(config.dataDir)}`, "utf16le"));
           await execFileAsync("schtasks.exe", ["/Create", "/TN", WINDOWS_WORKER_TASK, "/XML", taskXml, "/F"], { windowsHide: true, timeout: 15_000 });
           stdout(`scheduled-task=${WINDOWS_WORKER_TASK}`);
           stdout(`worker-script=${script}`);
