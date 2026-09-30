@@ -45,7 +45,7 @@ function Refresh-Path {
 }
 
 $node = Get-Command node -ErrorAction SilentlyContinue
-$major = if ($node) { & $node.Source -p 'process.versions.node.split(".")[0]' } else { '' }
+$major = if ($node) { & $node.Source -p 'parseInt(process.versions.node)' } else { '' }
 if ($major -ne '24') {
   if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
     throw 'Node.js 24 is required. Install Node.js 24 and run this installer again.'
@@ -54,7 +54,7 @@ if ($major -ne '24') {
   if ($LASTEXITCODE -ne 0) { throw 'Node.js installation did not complete. Follow winget instructions and rerun the installer.' }
   Refresh-Path
   $node = Get-Command node -ErrorAction Stop
-  $major = & $node.Source -p 'process.versions.node.split(".")[0]'
+  $major = & $node.Source -p 'parseInt(process.versions.node)'
   if ($major -ne '24') { throw "Node.js 24 is required; found $(& $node.Source --version)." }
 }
 $npm = Join-Path (Split-Path $node.Source) 'npm.cmd'
