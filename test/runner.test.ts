@@ -1,11 +1,32 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { once } from "node:events";
+import { resolve } from "node:path";
 
-import { dockerArgs } from "../src/worker/runner.js";
+import { HostRunner, dockerArgs } from "../src/worker/runner.js";
 import {
   defaultWorkerConfig,
   setWorkerConfigValue,
 } from "../src/worker/config.js";
+
+test("native runner terminates descendants as well as the task parent", { timeout: 15_000 }, async () => {
+  const runner = new HostRunner();
+  const child = runner.spawn(process.execPath, [resolve("test/fixtures/process-tree.mjs")], { windowsHide: true });
+  const closed = once(child, "close");
+  try {
+    let output = "";
+    for await (const chunk of child.stdout) {
+      output += String(chunk);
+      if (output.includes("tree-ready")) break;
+    }
+    assert.match(output, /tree-ready/);
+    runner.terminate(child, "SIGKILL");
+    // The grandchild inherits stderr too: close cannot arrive while it holds that pipe open.
+    await closed;
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) runner.terminate(child, "SIGKILL");
+  }
+});
 
 test("Docker runner keeps the worker process isolated", () => {
   const args = dockerArgs("pi-cloud:test", "/srv/workspace", "pi", [

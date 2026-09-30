@@ -34,8 +34,7 @@ export async function selectSyncItems(
     if (!ctx.hasUI) return null;
     while (true) {
       const choices = items.map((item) => {
-        let marker = selected.has(item.id) ? "☑" : "☐";
-        if (item.required) marker = "■";
+        const marker = item.required ? "[*]" : selected.has(item.id) ? "[x]" : "[ ]";
         return `${marker} ${item.label}${item.required ? ` (${labels.required})` : ""} · ${item.description}`;
       });
       const choice = await ctx.ui.select([labels.title, ...(labels.summary ?? [])].join("\n"), [...choices, labels.upload, labels.cancel]);
@@ -99,8 +98,7 @@ export async function selectSyncItems(
           if (!item) continue;
           const focused = cursor === index;
           const checked = selected.has(item.id);
-          let marker = checked ? "☑" : "☐";
-          if (item.required) marker = "■";
+          const marker = item.required ? "[*]" : checked ? "[x]" : "[ ]";
           const suffix = item.required ? `  ${labels.required}` : "";
           const prefix = focused ? theme.fg("accent", "> ") : "  ";
           const color = checked ? "text" : "muted";

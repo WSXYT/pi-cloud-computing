@@ -89,6 +89,8 @@ test("preflight supports toggling multiple items and an explicit upload action",
   );
 
   assert.deepEqual([...(selected ?? [])], ["git"]);
+  assert.match(rendered, /\[x\]/);
+  assert.doesNotMatch(rendered, /[☑☐■]/);
   assert.match(rendered, /Upload selected/);
   assert.match(rendered, /Cancel/);
   assert.match(rendered, /Local project: \/work\/project/);

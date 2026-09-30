@@ -13,7 +13,8 @@ test("shell installer guides language, role, IP, Pi reuse, and pairing", async (
   assert.match(script, /Found existing Pi/);
   assert.match(script, /api\.ipify\.org/);
   assert.match(script, /pair-command=/);
-  assert.match(script, /Copy the complete \/cloud-pair line/);
+  assert.match(script, /client-command-posix=/);
+  assert.match(script, /Local Windows PowerShell/);
   assert.match(script, /merge --ff-only FETCH_HEAD/);
   assert.match(script, /client language "\$LANGUAGE"/);
   assert.match(script, /worker health/);
@@ -26,7 +27,8 @@ test("PowerShell installer reuses Pi and configures the selected language", asyn
   assert.match(script, /Found existing Pi/);
   assert.match(script, /client language \$Language/);
   assert.doesNotMatch(script, /Set-Content|reset --hard/);
-  assert.match(script, /输入 \/cloud/);
+  assert.match(script, /F6/);
+  assert.match(script, /client pair \$PairUrl \$Fingerprint \$Code/);
 });
 
 const exec = promisify(execFile);
@@ -96,8 +98,8 @@ exit 0
     }
     await writeFile(log, "");
     const success = await exec(command, args, { env: { ...env, PI_CLOUD_TEST_FAIL: "" }, timeout: 15_000 });
-    assert.match(success.stdout, /Local extension installed/);
-    assert.match(success.stdout, /\/cloud/);
+    assert.match(success.stdout, /Local extension configured/);
+    assert.match(success.stdout, /F6/);
     const calls = await readFile(log, "utf8");
     assert.match(calls, /merge --ff-only FETCH_HEAD/);
     assert.match(calls, /client language en/);

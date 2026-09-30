@@ -1,8 +1,33 @@
+import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { link, mkdir, rename, rm, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { link, mkdir, open, rename, rm, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { promisify } from "node:util";
 import lockfile from "proper-lockfile";
+
+const execFileAsync = promisify(execFile);
+const systemTool = (name: string): string => join(process.env.SystemRoot ?? process.env.WINDIR ?? "C:\\Windows", "System32", name);
+let currentSid: Promise<string> | undefined;
+async function windowsSid(): Promise<string> {
+  currentSid ??= execFileAsync(systemTool("whoami.exe"), ["/user", "/fo", "csv", "/nh"], { windowsHide: true }).then(({ stdout }) => {
+    const sid = stdout.match(/S-1-(?:\d+-)+\d+/)?.[0];
+    if (!sid) throw new Error("Could not identify the current Windows account for private storage");
+    return sid;
+  });
+  return currentSid;
+}
+
+async function secureWindowsPath(path: string, directory = false): Promise<void> {
+  if (process.platform !== "win32") return;
+  const sid = await windowsSid();
+  await execFileAsync(systemTool("icacls.exe"), [path, "/inheritance:r", "/grant:r", `*${sid}:${directory ? "(OI)(CI)F" : "F"}`, ...(directory ? ["/T"] : [])], { windowsHide: true });
+}
+
+export async function ensurePrivateDirectory(path: string): Promise<void> {
+  await mkdir(path, { recursive: true, mode: 0o700 });
+  await secureWindowsPath(path, true);
+}
 
 /** The same lease settings are shared by the client, Worker and administrative CLI. */
 export async function withPrivateFileLock<T>(path: string, action: () => Promise<T>): Promise<T> {
@@ -25,11 +50,16 @@ export async function writePrivateFile(
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
   const temporary = `${path}.${randomUUID()}.tmp`;
   try {
-    await writeFile(temporary, data, {
-      mode: 0o600,
-      flag: "wx",
-      flush: true,
-    });
+    if (process.platform === "win32") {
+      const handle = await open(temporary, "wx", 0o600);
+      try {
+        await secureWindowsPath(temporary);
+        await handle.writeFile(data);
+        await handle.sync();
+      } finally { await handle.close(); }
+    } else {
+      await writeFile(temporary, data, { mode: 0o600, flag: "wx", flush: true });
+    }
     if (exclusive) await link(temporary, path);
     else {
       // Windows readers/antivirus can briefly deny replacement. Never unlink the old state to work around it.

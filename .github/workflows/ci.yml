@@ -29,6 +29,8 @@ jobs:
       - run: npm run check
       - run: npm test
       - run: npm run pack:smoke
+      - name: Install, pair, restart and stop the native background service
+        run: node scripts/ci-native-service.mjs
       - if: runner.os != 'Windows'
         run: bash -n scripts/install.sh scripts/ci-install-worker.sh
       - if: runner.os == 'Windows'

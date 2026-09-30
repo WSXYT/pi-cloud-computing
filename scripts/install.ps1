@@ -1,10 +1,17 @@
 ﻿param(
   [ValidateSet('zh-CN', 'en')][string]$Language,
-  [ValidateSet('client', 'worker-guide')][string]$Role,
+  [ValidateSet('client', 'worker')][string]$Role,
+  [string]$Ip,
+  [string]$PairUrl,
+  [string]$Fingerprint,
+  [string]$Code,
+  [string]$Revision,
   [string]$Repo = $(if ($env:PI_CLOUD_REPO) { $env:PI_CLOUD_REPO } else { 'WSXYT/pi-cloud-computing' })
 )
 
 $ErrorActionPreference = 'Stop'
+if ($Revision -and $Revision -notmatch '^[a-f0-9]{40}$') { throw 'Revision must be an exact Git commit.' }
+if (($PairUrl -or $Fingerprint -or $Code) -and -not ($PairUrl -and $Fingerprint -and $Code)) { throw 'Pairing requires PairUrl, Fingerprint and Code together.' }
 
 if (-not $Language) {
   Write-Host '选择语言 / Choose language:'
@@ -17,21 +24,19 @@ if (-not $Role) {
   if ($Language -eq 'zh-CN') {
     Write-Host '安装什么？'
     Write-Host '  1) 本地电脑：Pi 插件'
-    Write-Host '  2) 显示 Linux VPS Worker 安装命令'
+    Write-Host '  2) 本机：原生云端 Worker'
   } else {
     Write-Host 'What do you want to install?'
     Write-Host '  1) Local computer: Pi extension'
-    Write-Host '  2) Show the Linux VPS Worker command'
+    Write-Host '  2) This computer: native cloud Worker'
   }
   $choice = Read-Host '>'
-  $Role = if ($choice -eq '2') { 'worker-guide' } else { 'client' }
+  $Role = if ($choice -eq '2') { 'worker' } else { 'client' }
 }
-if ($Role -eq 'worker-guide') {
-  Write-Host ''
-  Write-Host 'Run this on the Linux VPS:'
-  Write-Host "curl -fsSL https://raw.githubusercontent.com/$Repo/main/scripts/install.sh | bash"
-  return
+if ($Role -eq 'worker' -and -not $Ip) {
+  $Ip = Read-Host 'Worker public or reachable IP address'
 }
+if ($Role -eq 'worker' -and -not $Ip) { throw 'A Worker IP is required.' }
 
 function Refresh-Path {
   $machine = [Environment]::GetEnvironmentVariable('Path', 'Machine')
@@ -78,15 +83,26 @@ if (Test-Path (Join-Path $source '.git')) {
   $dirty = git -C $source status --porcelain
   if ($LASTEXITCODE -ne 0) { throw "Could not inspect source directory: $source" }
   if ($dirty) { throw "Source directory has local changes: $source. Move it or set PI_CLOUD_SOURCE_DIR to a clean path; the installer will not discard your changes." }
-  git -C $source fetch origin main
-  if ($LASTEXITCODE -ne 0) { throw "git fetch failed" }
-  git -C $source merge --ff-only FETCH_HEAD
-  if ($LASTEXITCODE -ne 0) { throw 'Source update is not a fast-forward. Local commits were preserved; use a separate PI_CLOUD_SOURCE_DIR.' }
+  if ($Revision) {
+    $existingRevision = git -C $source rev-parse HEAD
+    if ($LASTEXITCODE -ne 0 -or $existingRevision -ne $Revision) { throw 'Existing source uses a different revision. Choose a separate PI_CLOUD_SOURCE_DIR; nothing was reset.' }
+  } else {
+    git -C $source fetch origin main
+    if ($LASTEXITCODE -ne 0) { throw "git fetch failed" }
+    git -C $source merge --ff-only FETCH_HEAD
+    if ($LASTEXITCODE -ne 0) { throw 'Source update is not a fast-forward. Local commits were preserved; use a separate PI_CLOUD_SOURCE_DIR.' }
+  }
 } else {
   if (Test-Path $source) { throw "Source directory exists but is not a Git checkout: $source. Move it or set PI_CLOUD_SOURCE_DIR to a clean path, then run the installer again." }
   New-Item -ItemType Directory -Force (Split-Path $source) | Out-Null
   git clone --depth 1 "https://github.com/$Repo.git" $source
   if ($LASTEXITCODE -ne 0) { throw "git clone failed" }
+  if ($Revision) {
+    git -C $source fetch --depth 1 origin $Revision
+    if ($LASTEXITCODE -ne 0) { throw 'Could not fetch the pinned source revision.' }
+    git -C $source checkout --detach FETCH_HEAD
+    if ($LASTEXITCODE -ne 0 -or (git -C $source rev-parse HEAD) -ne $Revision) { throw 'Source revision mismatch.' }
+  }
 }
 Push-Location $source
 try {
@@ -98,21 +114,50 @@ try {
   Pop-Location
 }
 
-& $pi.Source install $source
-if ($LASTEXITCODE -ne 0) { throw 'Pi extension installation failed.' }
-# Share the extension's locked, atomic update; preserve tokens/tasks and reject corrupt state.
-& $node.Source (Join-Path $source 'dist\src\cli.js') client language $Language
-if ($LASTEXITCODE -ne 0) { throw 'Client language could not be saved. Existing recovery state was preserved.' }
+$cli = Join-Path $source 'dist\src\cli.js'
+if ($Role -eq 'client') {
+  & $pi.Source install $source
+  if ($LASTEXITCODE -ne 0) { throw 'Pi extension installation failed.' }
+  # Share the extension's locked, atomic update; preserve tokens/tasks and reject corrupt state.
+  & $node.Source $cli client language $Language
+  if ($LASTEXITCODE -ne 0) { throw 'Client language could not be saved. Existing recovery state was preserved.' }
+  if ($PairUrl) {
+    & $node.Source $cli client pair $PairUrl $Fingerprint $Code
+    if ($LASTEXITCODE -ne 0) { throw 'Pairing failed. Existing state was preserved; generate a fresh pairing command on the Worker if the code expired.' }
+  }
 
+  Write-Host ''
+  if ($Language -eq 'zh-CN') {
+    Write-Host '本地插件已配置。打开 Pi，输入任务后按 F6 云端执行；Enter 本地执行。已打开 Pi 时输入 /reload。'
+  } else {
+    Write-Host 'Local extension configured. Open Pi: F6 sends the typed task to cloud; Enter stays local. Use /reload in an already open Pi.'
+  }
+  return
+}
+
+& $node.Source $cli config set language $Language
+if ($LASTEXITCODE -ne 0) { throw 'Worker language could not be saved.' }
+& $node.Source $cli config set runner host
+if ($LASTEXITCODE -ne 0) { throw 'Worker host runner could not be configured.' }
+$installOutput = & $node.Source $cli worker install --ip $Ip --service
+if ($LASTEXITCODE -ne 0) { throw 'Worker service installation failed.' }
+& $node.Source $cli worker start
+if ($LASTEXITCODE -ne 0) { throw 'Worker service could not be started.' }
+& $node.Source $cli worker health
+if ($LASTEXITCODE -ne 0) { throw 'Worker health check failed.' }
+$installOutput = & $node.Source $cli worker pair
+if ($LASTEXITCODE -ne 0) { throw 'Worker started, but could not generate a pairing code.' }
+$installOutput | ForEach-Object { Write-Host $_ }
+$pairCommand = $installOutput | Where-Object { $_ -like 'pair-command=*' } | Select-Object -First 1
+$clientPosix = $installOutput | Where-Object { $_ -like 'client-command-posix=*' } | Select-Object -First 1
+$clientPowershell = $installOutput | Where-Object { $_ -like 'client-command-powershell=*' } | Select-Object -First 1
 Write-Host ''
-if ($Language -eq 'zh-CN') {
-  Write-Host '本地插件安装完成。'
-  Write-Host '1. 重启 Pi 或输入 /reload'
-  Write-Host '2. 输入 /cloud 打开首次使用向导'
-  Write-Host '3. 如果还没有服务器，/cloud 中的帮助会给出 VPS 安装命令'
-} else {
-  Write-Host 'Local extension installed.'
-  Write-Host '1. Restart Pi or enter /reload'
-  Write-Host '2. Enter /cloud to open the first-run guide'
-  Write-Host '3. If no Worker exists yet, the /cloud help shows the VPS command'
+Write-Host 'Worker started and passed its local health check.'
+if ($clientPosix -and $clientPowershell) {
+  Write-Host 'Run one of these on your LOCAL computer within 10 minutes:'
+  Write-Host "macOS/Linux: $($clientPosix -replace '^client-command-posix=', '')"
+  Write-Host "Windows PowerShell: $($clientPowershell -replace '^client-command-powershell=', '')"
+} elseif ($pairCommand) {
+  Write-Host 'Installer link unavailable for this checkout; install the client from a verified release and then run this inside Pi:'
+  Write-Host ($pairCommand -replace '^pair-command=', '')
 }

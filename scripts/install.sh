@@ -8,12 +8,16 @@ IP=""
 RUNNER=""
 DOCKER_NETWORK=""
 ASSUME_YES=0
+PAIR_URL=""
+FINGERPRINT=""
+PAIR_CODE=""
+REVISION=""
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
   --client) ROLE="client" ;;
   --worker) ROLE="worker" ;;
-  --both) ROLE="both" ;;
+  --both) printf '%s\n' 'Install one role per machine: use --client locally and --worker on the server.' >&2; exit 2 ;;
   --ip)
     shift
     IP="${1:-}"
@@ -34,17 +38,20 @@ while [ "$#" -gt 0 ]; do
     shift
     REPO="${1:-}"
     ;;
+  --pair-url) shift; PAIR_URL="${1:-}" ;;
+  --fingerprint) shift; FINGERPRINT="${1:-}" ;;
+  --code) shift; PAIR_CODE="${1:-}" ;;
+  --revision) shift; REVISION="${1:-}" ;;
   -y | --yes) ASSUME_YES=1 ;;
   -h | --help)
     printf '%s\n' \
       'Pi Cloud installer' \
-      '  --client                 Install the local Pi extension' \
-      '  --worker --ip ADDRESS    Install the Linux Worker' \
-      '  --both --ip ADDRESS      Install both roles' \
+      '  --client                 Install/configure the local Pi extension' \
+      '  --worker --ip ADDRESS    Install the native Worker service' \
       '  --lang zh-CN|en          Set interface language' \
-      '  --runner host|docker     Set Worker isolation mode' \
+      '  --runner host|docker     Set Worker isolation mode (host is the default)' \
       '  --docker-network none|bridge  Explicit Docker egress policy' \
-      'Without role/language arguments, the installer asks interactively.'
+      'Install one role per machine; run the client and Worker installers separately.'
     exit 0
     ;;
   *)
@@ -75,21 +82,25 @@ if [ "$LANGUAGE" != "zh-CN" ] && [ "$LANGUAGE" != "en" ]; then
   printf '%s\n' 'Language must be zh-CN or en.' >&2
   exit 2
 fi
+if [ -n "$REVISION" ] && [[ ! "$REVISION" =~ ^[a-f0-9]{40}$ ]]; then
+  printf '%s\n' 'Revision must be an exact Git commit.' >&2; exit 2
+fi
+if [ -n "$PAIR_URL$FINGERPRINT$PAIR_CODE" ] && { [ -z "$PAIR_URL" ] || [ -z "$FINGERPRINT" ] || [ -z "$PAIR_CODE" ]; }; then
+  printf '%s\n' 'Pairing requires --pair-url, --fingerprint and --code together.' >&2; exit 2
+fi
 
 if [ -z "$ROLE" ]; then
   if [ "$LANGUAGE" = "zh-CN" ]; then
-    role_choice="$(ask $'安装到哪里？\n  1) 本地电脑：Pi 插件\n  2) Linux VPS：云端 Worker\n  3) 两者都安装\n> ' 1)"
+    role_choice="$(ask $'安装到哪里？\n  1) 本地电脑：Pi 插件\n  2) 服务器：原生云端 Worker\n> ' 1)"
   else
-    role_choice="$(ask $'What do you want to install?\n  1) Local computer: Pi extension\n  2) Linux VPS: cloud Worker\n  3) Both\n> ' 1)"
+    role_choice="$(ask $'What do you want to install?\n  1) Local computer: Pi extension\n  2) Server: native cloud Worker\n> ' 1)"
   fi
-  case "$role_choice" in 2) ROLE="worker" ;; 3) ROLE="both" ;; *) ROLE="client" ;; esac
+  case "$role_choice" in 2) ROLE="worker" ;; *) ROLE="client" ;; esac
 fi
 
-if [ "$ROLE" = "worker" ] || [ "$ROLE" = "both" ]; then
-  if [ "$(uname -s)" != "Linux" ] || ! command -v systemctl >/dev/null 2>&1; then
-    printf '%s\n' 'The Worker requires Linux with systemd. Install only the client on this computer.' >&2
-    exit 1
-  fi
+if [ "$ROLE" = "worker" ] && [ "$(uname -s)" != "Linux" ] && [ "$(uname -s)" != "Darwin" ]; then
+  printf '%s\n' 'Native Worker installation supports Linux and macOS from this shell. Use install.ps1 for Windows.' >&2
+  exit 1
 fi
 if [ -n "$DOCKER_NETWORK" ] && [ "$DOCKER_NETWORK" != "none" ] && [ "$DOCKER_NETWORK" != "bridge" ]; then
   printf '%s\n' 'Docker network must be none or bridge.' >&2
@@ -152,7 +163,7 @@ install_pi() {
 }
 export PATH="$GLOBAL_PREFIX/bin:$PATH"
 PI_BIN="$(command -v pi 2>/dev/null || true)"
-if [ "$ROLE" = "worker" ] || [ "$ROLE" = "both" ]; then
+if [ "$ROLE" = "worker" ]; then
   SYSTEM_PI="$GLOBAL_PREFIX/bin/pi"
   if [ ! -x "$SYSTEM_PI" ]; then install_pi; fi
   PI_BIN="$SYSTEM_PI"
@@ -172,8 +183,15 @@ if [ -d "$SOURCE_DIR/.git" ]; then
     printf '%s\n' "Source directory has local changes: $SOURCE_DIR" 'Move it or set PI_CLOUD_SOURCE_DIR to a clean path; the installer will not discard your changes.' >&2
     exit 1
   fi
-  git -C "$SOURCE_DIR" fetch origin main
-  git -C "$SOURCE_DIR" merge --ff-only FETCH_HEAD
+  if [ -n "$REVISION" ]; then
+    if [ "$(git -C "$SOURCE_DIR" rev-parse HEAD)" != "$REVISION" ]; then
+      printf '%s\n' 'Existing source uses a different revision; keep it and choose a separate PI_CLOUD_SOURCE_DIR for this command.' >&2
+      exit 1
+    fi
+  else
+    git -C "$SOURCE_DIR" fetch origin main
+    git -C "$SOURCE_DIR" merge --ff-only FETCH_HEAD
+  fi
 else
   if [ -e "$SOURCE_DIR" ]; then
     printf '%s\n' "Source directory exists but is not a Git checkout: $SOURCE_DIR" 'Move it or set PI_CLOUD_SOURCE_DIR to a clean path, then run the installer again.' >&2
@@ -181,6 +199,11 @@ else
   fi
   mkdir -p "$(dirname "$SOURCE_DIR")"
   git clone --depth 1 "https://github.com/$REPO.git" "$SOURCE_DIR"
+  if [ -n "$REVISION" ]; then
+    git -C "$SOURCE_DIR" fetch --depth 1 origin "$REVISION"
+    git -C "$SOURCE_DIR" checkout --detach FETCH_HEAD
+    [ "$(git -C "$SOURCE_DIR" rev-parse HEAD)" = "$REVISION" ] || { printf '%s\n' 'Source revision mismatch.' >&2; exit 1; }
+  fi
 fi
 (
   cd "$SOURCE_DIR"
@@ -194,24 +217,29 @@ configure_client_language() {
   "$NODE_BIN" "$CLI" client language "$LANGUAGE"
 }
 
-if [ "$ROLE" = "client" ] || [ "$ROLE" = "both" ]; then
+if [ "$ROLE" = "client" ]; then
   "$PI_BIN" install "$SOURCE_DIR"
   configure_client_language
+  if [ -n "$PAIR_URL" ]; then
+    "$NODE_BIN" "$CLI" client pair "$PAIR_URL" "$FINGERPRINT" "$PAIR_CODE"
+  fi
   if [ "$LANGUAGE" = "zh-CN" ]; then
-    printf '%s\n' '' '本地插件安装完成。' '1. 重启 Pi 或输入 /reload' '2. 输入 /cloud 打开首次使用向导'
+    printf '%s\n' '' '本地插件已配置。打开 Pi，输入任务后按 F6 云端执行；Enter 本地执行。已打开 Pi 时输入 /reload。'
   else
-    printf '%s\n' '' 'Local extension installed.' '1. Restart Pi or enter /reload' '2. Enter /cloud to open the first-run guide'
+    printf '%s\n' '' 'Local extension configured. Open Pi: F6 sends the typed task to cloud; Enter stays local. Use /reload in an already open Pi.'
   fi
 fi
 
-if [ "$ROLE" != "worker" ] && [ "$ROLE" != "both" ]; then exit 0; fi
-if [ "$(uname -s)" != "Linux" ] || ! command -v systemctl >/dev/null 2>&1; then
-  printf '%s\n' 'The Worker requires Linux with systemd.' >&2
+if [ "$ROLE" != "worker" ]; then exit 0; fi
+if [ "$(uname -s)" != "Linux" ] && [ "$(uname -s)" != "Darwin" ]; then
+  printf '%s\n' 'Native Worker installation supports Linux and macOS. Use install.ps1 for Windows.' >&2
   exit 1
 fi
 
 public_ip="$(curl -4 -fsS --max-time 5 https://api.ipify.org 2>/dev/null || true)"
-private_ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
+private_ip=""
+if [ "$(uname -s)" = "Linux" ]; then private_ip="$(hostname -I 2>/dev/null | awk '{print $1}')"; fi
+if [ "$(uname -s)" = "Darwin" ]; then private_ip="$(ipconfig getifaddr en0 2>/dev/null || true)"; fi
 if [ -z "$IP" ]; then
   if [ "$LANGUAGE" = "zh-CN" ]; then
     ip_choice="$(ask "检测到公网 IP ${public_ip:-未知}，内网 IP ${private_ip:-未知}。请输入 Worker 对外 IP [${public_ip:-$private_ip}]：" "${public_ip:-$private_ip}")"
@@ -225,14 +253,7 @@ if [ -z "$IP" ]; then
   exit 2
 fi
 
-if [ -z "$RUNNER" ]; then
-  if command -v docker >/dev/null 2>&1; then
-    if [ "$LANGUAGE" = "zh-CN" ]; then runner_choice="$(ask $'执行模式：\n  1) host（推荐先试用，使用服务账号权限）\n  2) Docker（隔离更强）\n> ' 1)"; else runner_choice="$(ask $'Execution mode:\n  1) host (recommended for the first trial)\n  2) Docker (stronger isolation)\n> ' 1)"; fi
-    if [ "$runner_choice" = "2" ]; then RUNNER="docker"; else RUNNER="host"; fi
-  else
-    RUNNER="host"
-  fi
-fi
+if [ -z "$RUNNER" ]; then RUNNER="host"; fi
 if [ "$RUNNER" != "host" ] && [ "$RUNNER" != "docker" ]; then
   printf '%s\n' 'Runner must be host or docker.' >&2
   exit 2
@@ -257,15 +278,20 @@ if [ "$RUNNER" = "docker" ]; then
     $SUDO docker build -f "$SOURCE_DIR/deploy/runner.Dockerfile" -t pi-cloud-worker:latest "$SOURCE_DIR"
   fi
 fi
-INSTALL_OUTPUT="$("$NODE_BIN" "$CLI" worker install --ip "$IP" --systemd)"
-DATA_DIR="${PI_CLOUD_DATA_DIR:-$HOME/.pi-cloud}"
-UNIT="$DATA_DIR/pi-cloud-worker.service"
-$SUDO install -D -m 0644 "$UNIT" /etc/systemd/system/pi-cloud-worker.service
-$SUDO systemctl daemon-reload
-$SUDO systemctl enable pi-cloud-worker.service
-$SUDO systemctl restart pi-cloud-worker.service
+if [ "$(uname -s)" = "Linux" ]; then
+  INSTALL_OUTPUT="$("$NODE_BIN" "$CLI" worker install --ip "$IP" --service)"
+  DATA_DIR="${PI_CLOUD_DATA_DIR:-$HOME/.pi-cloud}"
+  UNIT="$DATA_DIR/pi-cloud-worker.service"
+  $SUDO install -D -m 0644 "$UNIT" /etc/systemd/system/pi-cloud-worker.service
+  $SUDO systemctl daemon-reload
+  $SUDO systemctl enable pi-cloud-worker.service
+  $SUDO systemctl restart pi-cloud-worker.service
+else
+  INSTALL_OUTPUT="$("$NODE_BIN" "$CLI" worker install --ip "$IP" --service)"
+  "$NODE_BIN" "$CLI" worker start
+fi
 
-if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q '^Status: active'; then
+if [ "$(uname -s)" = "Linux" ] && command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q '^Status: active'; then
   open_firewall="$(ask "Open TCP port 9443 with UFW? [Y/n]: " y)"
   case "$open_firewall" in n | N | no | NO) ;; *) $SUDO ufw allow 9443/tcp ;; esac
 fi
@@ -276,14 +302,21 @@ for attempt in 1 2 3 4 5; do
   if [ "$attempt" -lt 5 ]; then sleep 1; fi
 done
 if [ "$health" != "OK" ]; then
-  printf '%s\n' 'Worker health check failed. Check: journalctl -u pi-cloud-worker -n 50 --no-pager. Installation is not ready for pairing.' >&2
+  printf '%s\n' 'Worker health check failed. Check the service: journalctl -u pi-cloud-worker (Linux) or launchctl print gui/$(id -u)/com.wsxyt.pi-cloud-worker (macOS). Installation is not ready for pairing.' >&2
   exit 1
 fi
+INSTALL_OUTPUT="$("$NODE_BIN" "$CLI" worker pair)"
 printf '%s\n' "$INSTALL_OUTPUT"
 pair_command="$(printf '%s\n' "$INSTALL_OUTPUT" | sed -n 's/^pair-command=//p')"
-printf '\n%s\n%s\n' '============================================================' "$pair_command"
-if [ "$LANGUAGE" = "zh-CN" ]; then
-  printf '%s\n' '============================================================' "Worker 已启动，本机健康检查：${health}" '把上面的 /cloud-pair 整行复制到本地 Pi，然后输入 /cloud。'
+client_command_posix="$(printf '%s\n' "$INSTALL_OUTPUT" | sed -n 's/^client-command-posix=//p')"
+client_command_powershell="$(printf '%s\n' "$INSTALL_OUTPUT" | sed -n 's/^client-command-powershell=//p')"
+if [ -n "$client_command_posix" ] && [ -n "$client_command_powershell" ]; then
+  printf '\n%s\n%s\n%s\n%s\n' '============================================================' "Local macOS/Linux terminal: $client_command_posix" "Local Windows PowerShell: $client_command_powershell" '============================================================'
 else
-  printf '%s\n' '============================================================' "Worker started; local health check: ${health}" 'Copy the complete /cloud-pair line above into local Pi, then enter /cloud.'
+  printf '%s\n' 'No verified one-click installer for this checkout. Install the client from a verified release, then enter this command inside Pi:' "$pair_command"
+fi
+if [ "$LANGUAGE" = "zh-CN" ]; then
+  printf '%s\n' "Worker 已启动，本机健康检查：${health}" '请在本地电脑运行对应系统的一整行命令；配对码 10 分钟后过期，过期时在服务器运行 worker pair。'
+else
+  printf '%s\n' "Worker started; local health check: ${health}" 'Run the complete command for your local OS on your own computer. The pairing code expires in 10 minutes; run worker pair on the server to renew it.'
 fi

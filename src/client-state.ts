@@ -30,6 +30,7 @@ export interface CloudTaskState {
   sessionArtifactId?: string;
   updatedAt: string;
   sessionPath?: string;
+  submittedSessionPath?: string;
   remoteSession?: SessionCursor;
   git?: GitBaseline;
   appliedGit?: GitBaseline;

@@ -1,4 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { StringDecoder } from "node:string_decoder";
 
 import {
@@ -93,6 +94,9 @@ export class PiRpcExecutor {
       GIT_TERMINAL_PROMPT: "0",
       PI_SKIP_VERSION_CHECK: "1",
     });
+    if (process.platform === "win32" && !this.options.command && envOverrides.PI_CLOUD_BOOTSTRAP) {
+      env.PI_CLOUD_PI_ENTRY = fileURLToPath(new URL("./bundle/cli.js", import.meta.resolve("@earendil-works/pi-coding-agent")));
+    }
     if (!this.options.command && envOverrides.PI_CLOUD_BOOTSTRAP)
       args.unshift(envOverrides.PI_CLOUD_BOOTSTRAP);
     const command =
@@ -115,18 +119,23 @@ export class PiRpcExecutor {
     let assistantError: string | undefined;
     let terminatedAfterSettlement = false;
     let shutdownTimer: NodeJS.Timeout | undefined;
+    let settleTimer: NodeJS.Timeout | undefined;
     let killTimer: NodeJS.Timeout | undefined;
     const stop = () => {
       if (running.closing) return;
       running.closing = true;
-      child.stdin.end();
-      shutdownTimer = setTimeout(() => {
-        terminatedAfterSettlement = settled;
-        this.terminate(child, "SIGTERM");
-        killTimer = setTimeout(() => this.terminate(child, "SIGKILL"), 2_000);
-        killTimer.unref();
-      }, this.options.shutdownTimeoutMs ?? 5_000);
-      shutdownTimer.unref();
+      const closeStdin = () => {
+        child.stdin.end();
+        shutdownTimer = setTimeout(() => {
+          terminatedAfterSettlement = settled;
+          this.terminate(child, "SIGTERM");
+          killTimer = setTimeout(() => this.terminate(child, "SIGKILL"), 2_000);
+          killTimer.unref();
+        }, this.options.shutdownTimeoutMs ?? 5_000);
+        shutdownTimer.unref();
+      };
+      if (process.platform === "win32" && settled) settleTimer = setTimeout(closeStdin, 500);
+      else closeStdin();
     };
     const fail = (message: string) => {
       fatalError ??= message;
@@ -199,6 +208,7 @@ export class PiRpcExecutor {
     child.once("error", (error) => fail(error.message));
     child.once("close", (code, signal) => {
       clearTimeout(startup);
+      clearTimeout(settleTimer);
       clearTimeout(shutdownTimer);
       clearTimeout(killTimer);
       running.closing = true;

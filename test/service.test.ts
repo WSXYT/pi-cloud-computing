@@ -6,7 +6,11 @@ import test from "node:test";
 
 import {
   cleanupExpiredTasks,
+  renderLaunchdPlist,
   renderSystemdUnit,
+  renderWindowsWorkerScript,
+  WINDOWS_WORKER_TASK,
+  WORKER_SERVICE_LABEL,
 } from "../src/worker/service.js";
 
 test("renders a hardened systemd worker unit", () => {
@@ -19,6 +23,17 @@ test("renders a hardened systemd worker unit", () => {
   assert.match(unit, /Restart=on-failure/);
   assert.match(unit, /NoNewPrivileges=true/);
   assert.match(unit, /PI_CLOUD_DATA_DIR=\/srv\/pi-cloud/);
+});
+
+test("renders native macOS and Windows Worker services", () => {
+  const plist = renderLaunchdPlist({ dataDir: "/Users/me/.pi-cloud", executable: "/usr/local/bin/node", cliPath: "/opt/pi-cloud/dist/cli.js", label: WORKER_SERVICE_LABEL });
+  assert.match(plist, new RegExp(`<key>Label</key><string>${WORKER_SERVICE_LABEL}</string>`));
+  assert.match(plist, /<key>RunAtLoad<\/key><true\/>/);
+  assert.match(plist, /worker<\/string>/);
+  const script = renderWindowsWorkerScript({ dataDir: "C:\\Users\\me\\.pi-cloud", executable: "C:\\Program Files\\nodejs\\node.exe", cliPath: "C:\\pi-cloud\\dist\\cli.js" });
+  assert.match(script, /PI_CLOUD_DATA_DIR=C:\\Users\\me\\\.pi-cloud/);
+  assert.match(script, /worker serve/);
+  assert.equal(WINDOWS_WORKER_TASK, "PiCloudWorker");
 });
 
 test("removes only expired task directories", async () => {

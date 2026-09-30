@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
+import { createServer } from "node:https";
+import { once } from "node:events";
+import { TLSSocket } from "node:tls";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -11,6 +14,7 @@ import {
 import { createPairing } from "../src/worker/pairing.js";
 import { startWorkerServer } from "../src/worker/server.js";
 import { SecretStore } from "../src/worker/secrets.js";
+import { ensureSelfSignedCertificate } from "../src/worker/tls.js";
 import { loadWorkerState, saveWorkerState } from "../src/worker/state.js";
 
 test("keeps the verified certificate pin across pairing, uploads, and WSS", async () => {
@@ -90,6 +94,29 @@ test("keeps the verified certificate pin across pairing, uploads, and WSS", asyn
   } finally {
     await worker.close();
   }
+});
+
+test("a stalled HTTP response cannot trigger the completed TLS handshake timeout", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "pi-cloud-timeout-"));
+  const tls = await ensureSelfSignedCertificate(root, "127.0.0.1");
+  let requests = 0;
+  const server = createServer({ key: tls.privateKey, cert: tls.certificate }, () => { requests++; });
+  t.after(async () => {
+    server.closeAllConnections();
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    await rm(root, { recursive: true, force: true });
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+  const original = TLSSocket.prototype.setTimeout;
+  t.mock.method(TLSSocket.prototype, "setTimeout", function (this: TLSSocket, ms: number, callback?: () => void) {
+    return original.call(this, ms === 30_000 ? 100 : ms, callback);
+  });
+  const connection = new CloudConnection(`https://127.0.0.1:${address.port}`, tls.fingerprint, "fixture-token");
+  await assert.rejects(() => connection.download("stalled"), /^Error: HTTP_RESPONSE_TIMEOUT$/);
+  assert.equal(requests, 1, "the request reached HTTP only after the pin was verified");
 });
 
 test("accepts a new one-time pairing code without restarting the Worker", async () => {

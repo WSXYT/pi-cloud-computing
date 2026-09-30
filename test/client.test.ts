@@ -177,7 +177,7 @@ test("retry uses the failed task's Worker without switching the default or losin
   const ctx = {
     cwd: root, hasUI: true, isIdle: () => true, hasPendingMessages: () => false,
     sessionManager: { getSessionId: () => "local-session", getSessionName: () => "existing", getSessionFile: () => sessionPath },
-    ui: { setStatus() {}, setWidget() {}, notify(message: string) { notifications.push(message); } },
+    ui: { setStatus() {}, setWidget() {}, confirm: async () => true, notify(message: string) { notifications.push(message); } },
   } as unknown as ExtensionCommandContext;
   const contacted: string[] = [];
   t.mock.method(CloudConnection.prototype, "workerInfo", async function (this: CloudConnection) {
@@ -185,13 +185,108 @@ test("retry uses the failed task's Worker without switching the default or losin
     throw new Error("stop before preflight");
   });
   await extension(fake);
+  const cleared: Array<[string, unknown]> = [];
+  ctx.ui.setStatus = (key, value) => { cleared.push([key, value]); };
+  ctx.ui.setWidget = (key, value) => { cleared.push([key, value]); };
   await start!({}, ctx);
+  assert.ok(cleared.some(([key, value]) => key === "pi-cloud" && value === undefined));
+  assert.equal(notifications.length, 0, "restoring a failed task must not repeat its error or pin a result widget");
+  const rejectRetry = t.mock.method(ctx.ui, "confirm", async () => false);
+  await commands.get("cloud-retry")!("", ctx);
+  assert.deepEqual(contacted, [], "cancelled retries must never contact the Worker");
+  rejectRetry.mock.restore();
   await commands.get("cloud-retry")!("", ctx);
   assert.deepEqual(contacted, ["https://original.invalid"]);
   assert.ok(notifications.some((text) => text.includes("stop before preflight")));
   const saved = await loadClientState(statePath);
   assert.equal(saved.activeWorkerId, "different");
   assert.deepEqual(saved.tasks, [failed], "a failed retry must retain the original task");
+});
+
+test("releases a task after connection rejection and lets local input continue", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "pi-cloud-disconnect-"));
+  const statePath = join(root, "state.json");
+  const previous = process.env.PI_CLOUD_CLIENT_STATE;
+  process.env.PI_CLOUD_CLIENT_STATE = statePath;
+  t.after(async () => {
+    if (previous === undefined) delete process.env.PI_CLOUD_CLIENT_STATE;
+    else process.env.PI_CLOUD_CLIENT_STATE = previous;
+    await rm(root, { recursive: true, force: true });
+  });
+  const task: CloudTaskState = {
+    taskId: "running-task", workerId: "worker", baseUrl: "https://worker.invalid", fingerprint: "aa".repeat(32),
+    projectId: root, sessionId: "session", baseLeafId: null, lastEntryId: null, entriesSha256: "empty",
+    cursor: 0, status: "running", prompt: "run", updatedAt: new Date().toISOString(), accepted: true,
+  };
+  await saveClientState({ connections: [{ workerId: "worker", baseUrl: task.baseUrl, fingerprint: task.fingerprint, token: "token", pairedAt: new Date().toISOString() }], activeWorkerId: "worker", tasks: [task] }, statePath);
+  let inputHandler: ((event: { text: string }, ctx: ExtensionContext) => Promise<{ action: string }>) | undefined;
+  let sessionStart: ((event: unknown, ctx: ExtensionContext) => Promise<void>) | undefined;
+  const fake = {
+    registerCommand() {}, registerEntryRenderer() {},
+    on(name: string, handler: unknown) {
+      if (name === "input") inputHandler = handler as typeof inputHandler;
+      if (name === "session_start") sessionStart = handler as typeof sessionStart;
+    },
+  } as unknown as ExtensionAPI;
+  const notifications: string[] = [];
+  const ui = { setStatus() {}, setWidget() {}, notify(message: string) { notifications.push(message); } };
+  t.mock.method(CloudConnection.prototype, "openEvents", async () => { throw new Error("CERTIFICATE_MISMATCH"); });
+  await extension(fake);
+  const ctx = { cwd: root, hasUI: false, isIdle: () => true, hasPendingMessages: () => false, sessionManager: { getSessionId: () => "session", getEntries: () => [] }, ui } as unknown as ExtensionContext;
+  await sessionStart?.({}, ctx);
+  const result = await inputHandler?.({ text: "local after disconnect" }, ctx);
+  assert.deepEqual(result, { action: "continue" });
+  assert.equal((await loadClientState(statePath)).tasks?.[0]?.pendingInputs, undefined, "local input must not enter the disconnected remote outbox");
+  assert.equal(notifications.length, 1);
+});
+
+test("completed cloud results do not block an ordinary local input", async () => {
+  const inputHandlers: Array<(event: { text: string }, ctx: ExtensionContext) => Promise<{ action: string }>> = [];
+  const fake = {
+    registerCommand() {}, registerEntryRenderer() {},
+    on(name: string, handler: (event: { text: string }, ctx: ExtensionContext) => Promise<{ action: string }>) { if (name === "input") inputHandlers.push(handler); },
+  } as unknown as ExtensionAPI;
+  await extension(fake);
+  assert.equal(inputHandlers.length, 1);
+  const result = await inputHandlers[0]!({ text: "continue locally" }, { ui: { setEditorText() {} } } as unknown as ExtensionContext);
+  assert.deepEqual(result, { action: "continue" });
+});
+
+test("registers F6 as the cloud submit shortcut", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-cloud-shortcut-"));
+  const previous = process.env.PI_CLOUD_CLIENT_STATE;
+  process.env.PI_CLOUD_CLIENT_STATE = join(root, "state.json");
+  await saveClientState({ activeWorkerId: "worker", connections: [{ workerId: "worker", baseUrl: "https://example.invalid", fingerprint: "aa".repeat(32), token: "test-token", pairedAt: new Date().toISOString() }] });
+  let shortcut: string | undefined;
+  let shortcutHandler: ((ctx: ExtensionContext) => Promise<void>) | undefined;
+  let editor = "run this in the cloud";
+  let sent: string | undefined;
+  const fake = {
+    registerCommand() {}, registerEntryRenderer() {}, on() {},
+    registerShortcut(key: string, options: { handler: (ctx: ExtensionContext) => Promise<void> }) { shortcut = key; shortcutHandler = options.handler; },
+    sendUserMessage(message: string) { sent = message; },
+  } as unknown as ExtensionAPI;
+  try {
+    await extension(fake);
+    assert.equal(shortcut, "f6");
+    const notifications: string[] = [];
+    let idle = false;
+    const ctx = { isIdle: () => idle, hasPendingMessages: () => false,
+      ui: { getEditorText: () => editor, setEditorText: (value: string) => { editor = value; }, notify: (message: string) => notifications.push(message) },
+    } as unknown as ExtensionContext;
+    await shortcutHandler?.(ctx);
+    assert.equal(editor, "run this in the cloud", "busy local Pi must retain the draft");
+    assert.equal(sent, undefined);
+    assert.equal(notifications.length, 1);
+    idle = true;
+    await shortcutHandler?.(ctx);
+    assert.equal(editor, "");
+    assert.equal(sent, "/cloud-submit run this in the cloud");
+  } finally {
+    if (previous === undefined) delete process.env.PI_CLOUD_CLIENT_STATE;
+    else process.env.PI_CLOUD_CLIENT_STATE = previous;
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("registers the cloud command surface", async () => {
@@ -208,11 +303,14 @@ test("registers the cloud command surface", async () => {
     "cloud-pair",
     "cloud-unpair",
     "cloud-abort",
+    "cloud-cancel",
+    "cloud-append",
     "cloud-submit",
     "cloud-retry",
     "cloud-reconnect",
     "cloud-apply",
     "cloud-merge",
+    "cloud-receive",
     "cloud-local",
     "cloud-tasks",
     "cloud-inputs",

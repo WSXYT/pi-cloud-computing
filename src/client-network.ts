@@ -46,10 +46,11 @@ function pinnedAgent(fingerprint: string): Agent {
       rejectUnauthorized: false,
     });
     const fail = (error: Error) => callback?.(error, socket);
+    const handshakeTimeout = () => {
+      socket.destroy(new Error("TLS_HANDSHAKE_TIMEOUT"));
+    };
     socket.once("error", fail);
-    socket.setTimeout(15_000, () =>
-      socket.destroy(new Error("TLS connection timed out")),
-    );
+    socket.setTimeout(15_000, handshakeTimeout);
     socket.once("secureConnect", () => {
       try {
         assertPinned(socket, fingerprint);
@@ -58,6 +59,7 @@ function pinnedAgent(fingerprint: string): Agent {
         return;
       }
       socket.setTimeout(0);
+      socket.removeListener("timeout", handshakeTimeout);
       socket.removeListener("error", fail);
       callback?.(null, socket);
     });
@@ -143,11 +145,12 @@ export class CloudConnection {
     return { token: value.token, workerId: value.workerId, certificateFingerprint: value.certificateFingerprint };
   }
 
-  async hasArtifact(id: string): Promise<boolean> {
+  async hasArtifact(id: string, signal?: AbortSignal): Promise<boolean> {
     try {
       await this.request(`/artifacts/${encodeURIComponent(id)}`, {
         method: "HEAD",
         authenticated: true,
+        signal,
       });
       return true;
     } catch (error) {
@@ -160,24 +163,26 @@ export class CloudConnection {
     id: string,
     data: Uint8Array,
     contentType: string,
+    signal?: AbortSignal,
   ): Promise<void> {
     await this.request(`/artifacts/${encodeURIComponent(id)}`, {
       method: "POST",
       body: Buffer.from(data),
       contentType,
       authenticated: true,
+      signal,
     });
   }
 
-  async workerInfo(): Promise<WorkerIdentity> {
-    return jsonResponse(await this.request("/worker/manifest", { method: "GET", authenticated: true }), (value) => {
+  async workerInfo(signal?: AbortSignal): Promise<WorkerIdentity> {
+    return jsonResponse(await this.request("/worker/manifest", { method: "GET", authenticated: true, signal }), (value) => {
       if (!value || typeof value !== "object" || !("worker" in value)) throw new Error("Worker upgrade required: missing capabilities");
       return parseWorkerIdentity(value.worker);
     });
   }
 
-  async listSecrets(): Promise<SecretMetadata[]> {
-    return jsonResponse(await this.request("/secrets", { method: "GET", authenticated: true }), (value) => {
+  async listSecrets(signal?: AbortSignal): Promise<SecretMetadata[]> {
+    return jsonResponse(await this.request("/secrets", { method: "GET", authenticated: true, signal }), (value) => {
       if (!Array.isArray(value)) throw new Error("invalid Worker credential metadata");
       return value.map(parseSecretMetadata);
     });
@@ -187,13 +192,14 @@ export class CloudConnection {
     await this.request("/tokens/current", { method: "DELETE", authenticated: true });
   }
 
-  async uploadSecret(id: string, value: string, version = 1): Promise<SecretMetadata> {
+  async uploadSecret(id: string, value: string, version = 1, signal?: AbortSignal): Promise<SecretMetadata> {
     const response = await this.request(`/secrets/${encodeURIComponent(id)}`, {
       method: "POST",
       body: value,
       contentType: "application/json",
       authenticated: true,
       headers: { "x-secret-version": String(version) },
+      signal,
     });
     const metadata = jsonResponse(response, parseSecretMetadata);
     if (metadata.id !== id || metadata.version !== version || metadata.sha256 !== sha256(value)) throw new Error("invalid credential upload response");
@@ -207,10 +213,11 @@ export class CloudConnection {
     });
   }
 
-  async download(id: string): Promise<Buffer> {
+  async download(id: string, signal?: AbortSignal): Promise<Buffer> {
     return this.request(`/artifacts/${encodeURIComponent(id)}`, {
       method: "GET",
       authenticated: true,
+      signal,
     });
   }
 
@@ -258,6 +265,7 @@ export class CloudConnection {
       contentType?: string;
       authenticated?: boolean;
       headers?: Record<string, string>;
+      signal?: AbortSignal | undefined;
     },
   ): Promise<Buffer> {
     const url = new URL(path, this.baseUrl);
@@ -267,6 +275,7 @@ export class CloudConnection {
     if (options.contentType) headers["content-type"] = options.contentType;
     if (options.authenticated && this.token)
       headers.authorization = `Bearer ${this.token}`;
+    if (options.signal?.aborted) throw new Error("CLOUD_CANCELLED");
     const requestOptions: RequestOptions = {
       hostname: url.hostname.replace(/^\[|\]$/g, ""),
       port: url.port,
@@ -276,11 +285,16 @@ export class CloudConnection {
       headers,
     };
     return new Promise((resolve, reject) => {
+      let onAbort: (() => void) | undefined;
+      const cleanup = () => {
+        if (onAbort) options.signal?.removeEventListener("abort", onAbort);
+      };
+      const fail = (error: Error) => { cleanup(); reject(error); };
       const req = request(requestOptions, (response) => {
         const chunks: Buffer[] = [];
         let size = 0;
-        response.on("error", reject);
-        response.on("aborted", () => reject(new Error("Response interrupted")));
+        response.on("error", fail);
+        response.on("aborted", () => fail(new Error("Response interrupted")));
         response.on("data", (chunk: Buffer) => {
           size += chunk.length;
           if (size > 50 * 1024 * 1024) {
@@ -297,14 +311,17 @@ export class CloudConnection {
               const value = JSON.parse(body.toString("utf8")) as { error?: unknown };
               if (typeof value.error === "string") message = value.error;
             } catch { /* Don't echo an unstructured proxy page or server body into Pi. */ }
-            reject(new Error(message));
-          } else resolve(body);
+            fail(new Error(message));
+          } else {
+            cleanup();
+            resolve(body);
+          }
         });
       });
-      req.on("error", reject);
-      req.setTimeout(30_000, () =>
-        req.destroy(new Error("Worker request timed out")),
-      );
+      onAbort = () => req.destroy(new Error("CLOUD_CANCELLED"));
+      req.on("error", fail);
+      if (options.signal) options.signal.addEventListener("abort", onAbort, { once: true });
+      req.setTimeout(30_000, () => req.destroy(new Error("HTTP_RESPONSE_TIMEOUT")));
       if (options.body !== undefined) req.write(options.body);
       req.end();
     });

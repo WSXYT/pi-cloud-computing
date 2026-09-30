@@ -5,7 +5,7 @@ import {
   type SpawnOptions,
 } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { isAbsolute, relative, sep } from "node:path";
+import { isAbsolute, join, relative, sep } from "node:path";
 
 export interface ExecutionRunner {
   spawn(
@@ -35,7 +35,15 @@ export class HostRunner implements ExecutionRunner {
     child: ChildProcessWithoutNullStreams,
     signal: NodeJS.Signals,
   ): void {
-    if (process.platform !== "win32" && child.pid) {
+    if (process.platform === "win32" && child.pid) {
+      const systemRoot = process.env.SystemRoot ?? process.env.WINDIR ?? "C:\\Windows";
+      execFile(join(systemRoot, "System32", "taskkill.exe"), ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true }, (error) => {
+        if (error && child.exitCode === null && child.signalCode === null) {
+          child.emit("error", new Error("Could not confirm Windows task process-tree termination"));
+          child.kill(signal);
+        }
+      });
+    } else if (child.pid) {
       try {
         process.kill(-child.pid, signal);
       } catch (error) {

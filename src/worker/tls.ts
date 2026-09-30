@@ -1,12 +1,20 @@
 import { createPrivateKey, X509Certificate } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm } from "node:fs/promises";
 import { isIP } from "node:net";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { withPrivateFileLock, writePrivateFile } from "../storage.js";
+import { ensurePrivateDirectory, withPrivateFileLock, writePrivateFile } from "../storage.js";
 
 const execFileAsync = promisify(execFile);
+
+async function opensslExecutable(): Promise<string> {
+  if (process.platform !== "win32") return "openssl";
+  const { stdout } = await execFileAsync("git", ["--exec-path"], { windowsHide: true });
+  const executable = resolve(stdout.trim(), "../..", "bin", "openssl.exe");
+  await access(executable);
+  return executable;
+}
 
 export interface CertificatePaths {
   certificate: string;
@@ -20,10 +28,11 @@ export function certificatePaths(dataDir: string): CertificatePaths {
 export async function generateSelfSignedCertificate(dataDir: string, ip: string, days = 365): Promise<CertificatePaths> {
   if (isIP(ip) === 0) throw new Error("TLS certificate IP must be an IPv4 or IPv6 address");
   const paths = certificatePaths(dataDir);
-  await mkdir(join(dataDir, "tls"), { recursive: true, mode: 0o700 });
+  await ensurePrivateDirectory(join(dataDir, "tls"));
   const temporary = await mkdtemp(join(dataDir, "tls", ".generate-"));
   try {
-    await execFileAsync("openssl", [
+    await ensurePrivateDirectory(temporary);
+    await execFileAsync(await opensslExecutable(), [
       "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-sha256", "-days", String(days),
       "-keyout", join(temporary, "key.pem"), "-out", join(temporary, "cert.pem"),
       "-subj", "/CN=pi-cloud-worker", "-addext", `subjectAltName=IP:${ip}`,

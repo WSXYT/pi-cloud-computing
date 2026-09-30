@@ -1,7 +1,7 @@
 // Copied into a task's runtime directory and executed inside its selected runner.
 // Only Node built-ins: no code from an uploaded package executes in the Worker process.
 import { spawn, type ChildProcess } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -14,7 +14,7 @@ function run(command: string, args: string[], cwd: string): Promise<number> {
     child = spawn(command, args, {
       cwd,
       env: process.env,
-      stdio: [command === "pi" ? "inherit" : "ignore", "inherit", "inherit"],
+      stdio: [command === "pi" || args[0] === process.env.PI_CLOUD_PI_ENTRY ? "inherit" : "ignore", "inherit", "inherit"],
     });
     child.once("error", reject);
     child.once("close", (code) => resolve(code ?? 1));
@@ -38,9 +38,11 @@ try {
     if (inside.startsWith("..") || isAbsolute(inside))
       throw new Error("invalid runtime dependency path");
     // Pi installs registry/Git packages itself; only uploaded local packages need this.
+    const npmCli = join(dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js");
+    const nativeNpm = process.platform === "win32" && (await stat(npmCli).catch(() => undefined))?.isFile();
     const code = await run(
-      "npm",
-      ["install", "--omit=dev", "--no-audit", "--no-fund"],
+      nativeNpm ? process.execPath : "npm",
+      [...(nativeNpm ? [npmCli] : []), "install", "--omit=dev", "--no-audit", "--no-fund"],
       directory,
     );
     if (code !== 0)
@@ -48,7 +50,8 @@ try {
         `runtime dependency installation failed (${code}) at ${path}`,
       );
   }
-  process.exitCode = await run("pi", process.argv.slice(2), process.cwd());
+  const piEntry = process.env.PI_CLOUD_PI_ENTRY;
+  process.exitCode = await run(piEntry ? process.execPath : "pi", [...(piEntry ? [piEntry] : []), ...process.argv.slice(2)], process.cwd());
 } catch (error) {
   process.stdout.write(
     `${JSON.stringify({

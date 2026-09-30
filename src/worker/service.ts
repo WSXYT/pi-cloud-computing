@@ -10,6 +10,92 @@ export interface SystemdUnitOptions {
   docker?: boolean;
 }
 
+export interface LaunchdPlistOptions {
+  executable?: string;
+  cliPath?: string;
+  dataDir: string;
+  label?: string;
+}
+
+export interface WindowsWorkerScriptOptions {
+  executable?: string;
+  cliPath?: string;
+  dataDir: string;
+}
+
+export const WORKER_SERVICE_LABEL = "com.wsxyt.pi-cloud-worker";
+export const WINDOWS_WORKER_TASK = "PiCloudWorker";
+
+function plistQuote(value: string): string {
+  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+export function launchdPlistPath(label = WORKER_SERVICE_LABEL): string {
+  return join(homedir(), "Library", "LaunchAgents", `${label}.plist`);
+}
+
+export function renderLaunchdPlist(options: LaunchdPlistOptions): string {
+  const executable = options.executable ?? process.execPath;
+  const cliPath = options.cliPath ?? process.argv[1] ?? "pi-cloud";
+  const label = options.label ?? WORKER_SERVICE_LABEL;
+  const values = [executable, cliPath, "worker", "serve"];
+  return [
+    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>",
+    "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">",
+    "<plist version=\"1.0\"><dict>",
+    `<key>Label</key><string>${plistQuote(label)}</string>`,
+    "<key>ProgramArguments</key><array>",
+    ...values.map((value) => `<string>${plistQuote(value)}</string>`),
+    "</array>",
+    "<key>EnvironmentVariables</key><dict>",
+    `<key>PI_CLOUD_DATA_DIR</key><string>${plistQuote(options.dataDir)}</string>`,
+    `<key>HOME</key><string>${plistQuote(homedir())}</string>`,
+    `<key>PATH</key><string>${plistQuote(process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin")}</string>`,
+    "</dict>",
+    "<key>RunAtLoad</key><true/>",
+    "<key>KeepAlive</key><true/>",
+    "<key>ProcessType</key><string>Background</string>",
+    "<key>Umask</key><integer>63</integer>",
+    "</dict></plist>",
+    "",
+  ].join("\n");
+}
+
+export async function writeLaunchdPlist(dataDir: string, options: Omit<LaunchdPlistOptions, "dataDir"> = {}): Promise<string> {
+  const path = launchdPlistPath(options.label);
+  await writePrivateFile(path, renderLaunchdPlist({ ...options, dataDir }));
+  return path;
+}
+
+function windowsQuote(value: string): string {
+  if (/[\r\n"%!^&|<>]/.test(value)) throw new Error("Worker service path contains unsupported Windows command characters");
+  return `"${value}"`;
+}
+
+export function windowsWorkerScriptPath(dataDir: string): string {
+  return join(dataDir, "pi-cloud-worker.cmd");
+}
+
+export function renderWindowsWorkerScript(options: WindowsWorkerScriptOptions): string {
+  const executable = windowsQuote(options.executable ?? process.execPath);
+  const cliPath = windowsQuote(options.cliPath ?? process.argv[1] ?? "pi-cloud");
+  const dataDir = options.dataDir;
+  if (/[\r\n"%!^&|<>]/.test(dataDir)) throw new Error("Worker data directory contains unsupported Windows command characters");
+  return [
+    "@echo off",
+    "setlocal DisableDelayedExpansion",
+    `set "PI_CLOUD_DATA_DIR=${dataDir}"`,
+    `${executable} ${cliPath} worker serve`,
+    "",
+  ].join("\r\n");
+}
+
+export async function writeWindowsWorkerScript(dataDir: string, options: Omit<WindowsWorkerScriptOptions, "dataDir"> = {}): Promise<string> {
+  const path = windowsWorkerScriptPath(dataDir);
+  await writePrivateFile(path, renderWindowsWorkerScript({ ...options, dataDir }));
+  return path;
+}
+
 function systemdQuote(value: string, executable = false): string {
   if (/[\u0000-\u001f\u007f]/.test(value)) throw new Error("invalid systemd value");
   const escaped = value.replace(/%/g, "%%").replace(/\\/g, "\\\\").replace(/"/g, '\\"');

@@ -9,12 +9,13 @@ import {
 import { Markdown } from "@earendil-works/pi-tui";
 import type WebSocket from "ws";
 
+import { CloudEditor, type CloudEditorState } from "./client-editor.js";
 import { sha256 } from "./environment.js";
 import { scanEnvironment } from "./environment-archive.js";
 import { detectLocale, translate, type MessageKey } from "./i18n.js";
 import { assertGitRepository, createGitSnapshot, createWorkspaceArchive, currentGitMatches, parseGitSnapshot, repositoryRoot, serializeWorkspaceArchive } from "./git.js";
-import { exportSessionBranch, mergeSessionTail, parseSessionArchive, serializeSessionArchive, writeMergedSession } from "./session.js";
-import { parseTaskInput, parseTaskUiRequest, type ProtocolFrame, type SessionCursor, type TaskResult, type TaskSnapshot, type TaskSpec, type TaskStatus, type TaskUiRequest, type TaskUiResponse } from "./protocol.js";
+import { exportSessionBranch, mergeSessionTail, mergeSessionTailPreservingLocal, parseSessionArchive, serializeSessionArchive, writeMergedSession } from "./session.js";
+import { parseTaskInput, parseTaskUiRequest, type ProtocolFrame, type SessionCursor, type TaskInput, type TaskResult, type TaskSnapshot, type TaskSpec, type TaskStatus, type TaskUiRequest, type TaskUiResponse } from "./protocol.js";
 import { applyGitSnapshot } from "./result.js";
 import { safeFilePath, validateIdentifier } from "./paths.js";
 import { writePrivateFile } from "./storage.js";
@@ -31,6 +32,7 @@ interface ActiveTask {
   socket: WebSocket | undefined;
   generation: number;
   accepted: boolean;
+  followUp: boolean;
   reconnectAttempt: number;
   reconnectTimer?: ReturnType<typeof setTimeout>;
   retryBlocked: boolean;
@@ -68,6 +70,31 @@ export default async function piCloudExtension(pi: ExtensionAPI): Promise<void> 
   let lastResult: CloudTaskState | undefined;
   let shuttingDown = false;
   let submitting = false;
+  let submissionAbort: AbortController | undefined;
+  let editorContext: ExtensionContext | undefined;
+  let ownEditor: ReturnType<ExtensionContext["ui"]["getEditorComponent"]>;
+  const editorState: CloudEditorState = { locked: false, append: false, status: undefined };
+  const setCloudStatus = (ctx: ExtensionContext, text: string | undefined): void => {
+    editorState.status = text;
+    if (ownEditor && ctx.mode === "tui" && ctx.ui.getEditorComponent?.() === ownEditor) ctx.ui.setStatus("pi-cloud", undefined);
+    else ctx.ui.setStatus("pi-cloud", text);
+  };
+  const installEditor = (ctx: ExtensionContext): void => {
+    editorContext = ctx;
+    if (ctx.mode !== "tui" || ctx.ui.getEditorComponent()) return;
+    ownEditor = (tui, theme, keybindings) => new CloudEditor(tui, theme, keybindings, () => editorState,
+      (text) => editorContext!.ui.theme.fg("accent", text), () => {
+        if (!active || !editorContext) return;
+        active.followUp = false;
+        showTask(active, editorContext);
+      }, (text) => { if (editorContext) void sendFollowUp(text, editorContext); });
+    ctx.ui.setEditorComponent(ownEditor);
+  };
+  const removeEditor = (ctx: ExtensionContext): void => {
+    if (ownEditor && ctx.ui.getEditorComponent() === ownEditor) ctx.ui.setEditorComponent(undefined);
+    ownEditor = undefined;
+    editorContext = undefined;
+  };
   let wizardOpen = false;
   let saveWarning = false;
   const dirtyTasks = new Map<string, CloudTaskState>();
@@ -128,22 +155,33 @@ export default async function piCloudExtension(pi: ExtensionAPI): Promise<void> 
   };
   const statusText = (task: CloudTaskState) => task.finalizing ? tr("cloud.stopping") : tr(`cloud.task.${task.status}`, { taskId: task.taskId, cursor: task.cursor });
   const showTask = (task: ActiveTask, ctx: ExtensionContext): void => {
-    ctx.ui.setStatus("pi-cloud", statusText(task.state));
+    const info = statusText(task.state);
+    editorState.locked = true;
+    editorState.append = task.followUp;
+    setCloudStatus(ctx, task.followUp ? tr("cloud.appendReady") : `F6 · ${info}`);
+    if (ctx.mode === "tui" && ownEditor && ctx.ui.getEditorComponent() === ownEditor) return;
     ctx.ui.setWidget("pi-cloud", [
-      `☁ Pi Cloud · ${statusText(task.state)}`,
-      ...safeDisplayText(task.preview).split("\n").slice(-8),
+      `☁ Pi Cloud · ${info}`,
+      ...safeDisplayText(task.preview).split("\n").slice(-3),
       ...(task.state.pendingInputs?.length ? [tr("cloud.pendingInputs", { count: task.state.pendingInputs.length })] : []),
-      tr("cloud.liveHelp"),
+      tr(task.followUp ? "cloud.appendReady" : "cloud.busyInput"),
     ]);
   };
+  const clearTaskUi = (ctx: ExtensionContext): void => {
+    editorState.locked = false;
+    editorState.append = false;
+    setCloudStatus(ctx, undefined);
+    ctx.ui.setWidget("pi-cloud", undefined);
+    ctx.ui.setWidget("pi-cloud-help", undefined);
+  };
   const showResult = (task: CloudTaskState, ctx: ExtensionContext): void => {
-    ctx.ui.setStatus("pi-cloud", undefined);
-    ctx.ui.setWidget("pi-cloud", [
+    clearTaskUi(ctx);
+    ctx.ui.notify([
       statusText(task), ...(task.error ? [safeDisplayText(task.error)] : []),
-      ...(task.artifactId ? [task.artifactId] : []),
+      tr("cloud.resultHistory"),
       ...(task.artifactId || task.sessionArtifactId ? [tr("cloud.resultActions")] : []),
       ...(task.pendingInputs?.length ? [tr("cloud.pendingInputWarning", { count: task.pendingInputs.length })] : []),
-    ]);
+    ].join("\n"), task.status === "failed" ? "error" : "info");
   };
   const disconnect = (task: ActiveTask): void => {
     task.generation++;
@@ -302,10 +340,19 @@ export default async function piCloudExtension(pi: ExtensionAPI): Promise<void> 
   };
   const connectionFailed = (task: ActiveTask, ctx: ExtensionContext, error: unknown): void => {
     if (active !== task || shuttingDown) return;
-    task.retryBlocked = /CERTIFICATE_MISMATCH|AUTH_|401|403|invalid protocol/i.test(detail(error));
-    ctx.ui.setStatus("pi-cloud", tr(task.retryBlocked ? "cloud.authRequired" : "cloud.disconnectedRunning"));
-    if (task.retryBlocked) ctx.ui.notify(tr("cloud.authRequired"), "error");
-    else scheduleReconnect(task, ctx);
+    if (task.retryBlocked) return;
+    const rejected = /CERTIFICATE_MISMATCH|AUTH_|401|403|invalid protocol/i.test(detail(error));
+    task.retryBlocked = rejected || task.reconnectAttempt >= 5;
+    if (task.retryBlocked) {
+      disconnect(task);
+      active = undefined;
+      lastResult = task.state;
+      clearTaskUi(ctx);
+      ctx.ui.notify(tr(rejected ? "cloud.authRequired" : "cloud.reconnectStopped"), "warning");
+    } else {
+      setCloudStatus(ctx, tr("cloud.disconnectedRunning"));
+      scheduleReconnect(task, ctx);
+    }
   };
   const connectTask = async (task: ActiveTask, ctx: ExtensionContext, create = false): Promise<void> => {
     disconnect(task);
@@ -318,9 +365,7 @@ export default async function piCloudExtension(pi: ExtensionAPI): Promise<void> 
       if (active !== task || task.generation !== generation || shuttingDown) return;
       if (frame.type === "hello_ack") {
         if (frame.worker.workerId !== task.state.workerId) {
-          task.retryBlocked = true;
-          task.socket?.close(1003, "worker identity mismatch");
-          ctx.ui.notify(tr("cloud.authRequired"), "error");
+          connectionFailed(task, ctx, new Error("AUTH_WORKER_IDENTITY_MISMATCH"));
           return;
         }
         if (create && task.state.spec && task.state.readyToSubmit && task.socket)
@@ -355,7 +400,7 @@ export default async function piCloudExtension(pi: ExtensionAPI): Promise<void> 
       const data = entry.data as { taskId?: string; cursor?: number } | undefined;
       if (data?.taskId === task.taskId && typeof data.cursor === "number") seen.add(data.cursor);
     }
-    return { state: task, connection, socket: undefined, generation: 0, accepted: false, reconnectAttempt: 0,
+    return { state: task, connection, socket: undefined, generation: 0, accepted: false, followUp: false, reconnectAttempt: 0,
       retryBlocked: false, preview: "", seen, sentInputs: new Set(), uiSeen: new Set(), uiQueue: Promise.resolve(), uiAbort: new AbortController() };
   };
 
@@ -434,6 +479,21 @@ export default async function piCloudExtension(pi: ExtensionAPI): Promise<void> 
     ctx.ui.notify(tr(task.socket?.readyState === 1 ? "cloud.abortRequested" : "cloud.disconnectedRunning"), "info");
   });
 
+  register("cloud-cancel", "cloud.cancelDescription", async (_args, ctx) => {
+    if (submissionAbort) {
+      submissionAbort.abort();
+      ctx.ui.notify(tr("cloud.cancelled"), "info");
+      return;
+    }
+    throw new Error(tr("cloud.noTask"));
+  });
+
+  register("cloud-append", "cloud.appendChoice", async (_args, ctx) => {
+    if (!active) throw new Error(tr("cloud.noTask"));
+    active.followUp = true;
+    showTask(active, ctx);
+  });
+
   const submitTask = async (args: string, ctx: ExtensionCommandContext, workerId?: string): Promise<void> => {
     requireIdle(ctx);
     if (active || submitting) throw new Error(tr("cloud.taskActive", { taskId: active?.state.taskId ?? "…" }));
@@ -441,12 +501,17 @@ export default async function piCloudExtension(pi: ExtensionAPI): Promise<void> 
     const selected = connectionFor(workerId);
     if (!selected) throw new Error(tr("cloud.noWorker"));
     submitting = true;
+    editorState.locked = true;
+    setCloudStatus(ctx, tr("cloud.connecting"));
+    const controller = new AbortController();
+    submissionAbort = controller;
+    let prompt = args.trim();
+    let handedOff = false;
     try {
-      const prompt = args.trim() || await ctx.ui.input(tr("cloud.stepTask"), tr("cloud.defaultPrompt"));
+      prompt = prompt || await ctx.ui.input(tr("cloud.stepTask"), tr("cloud.defaultPrompt")) || "";
       if (!prompt) return;
       const sessionFile = ctx.sessionManager.getSessionFile();
       if (!sessionFile) throw new Error(tr("cloud.persistentRequired"));
-      if (!ctx.sessionManager.getSessionName()) pi.setSessionName(`☁ ${prompt.slice(0, 60)}`);
       let exists = true;
       try { await lstat(sessionFile); }
       catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; exists = false; }
@@ -461,16 +526,17 @@ export default async function piCloudExtension(pi: ExtensionAPI): Promise<void> 
           await next.sendUserMessage(`/cloud-submit ${prompt}`, { expandPromptTemplates: true });
         } });
         if (switched.cancelled) await rm(path, { force: true });
+        else handedOff = true;
         return;
       }
-      const worker = await selected.connection.workerInfo();
+      const worker = await selected.connection.workerInfo(controller.signal);
       if (worker.workerId !== selected.record.workerId || worker.capabilities.runtimeArchiveVersion !== 1) throw new Error(tr("cloud.upgradeWorker"));
       const runners = worker.capabilities.runners;
       const runner = runners.length === 1 ? runners[0] : await ctx.ui.select(tr("cloud.runnerChoice"), runners);
       if (runner !== "host" && runner !== "docker") return;
       if (runner === "docker" && (!worker.capabilities.dockerAvailable || worker.capabilities.dockerNetwork !== "bridge")) throw new Error(tr("cloud.networkBlocked"));
       const local = exportSessionBranch(ctx.sessionManager);
-      ctx.ui.setStatus("pi-cloud", tr("cloud.scanStatus"));
+      setCloudStatus(ctx, tr("cloud.scanStatus"));
       const workspace = await createWorkspaceArchive(ctx.cwd);
       const environment = await scanEnvironment({ agentDir: getAgentDir(), cwd: ctx.cwd, piVersion: VERSION, nodeVersion: process.version, platform: process.platform });
       environment.archive.manifest.secretVersions = [];
@@ -479,7 +545,7 @@ export default async function piCloudExtension(pi: ExtensionAPI): Promise<void> 
       const credentialHash = sha256(credentialData);
       const credentialId = `pi-runtime-${credentialHash}`;
       const hasCredentials = environment.credentials.files.length > 0 || Object.keys(environment.credentials.env).length > 0;
-      const savedSecrets = hasCredentials ? await selected.connection.listSecrets() : [];
+      const savedSecrets = hasCredentials ? await selected.connection.listSecrets(controller.signal) : [];
       const cached = savedSecrets.filter((secret) => secret.id === credentialId).sort((a, b) => b.version - a.version)[0];
       const reusable = cached && !cached.revokedAt && cached.sha256 === credentialHash;
       const taskId = randomUUID();
@@ -497,7 +563,7 @@ export default async function piCloudExtension(pi: ExtensionAPI): Promise<void> 
         { id: "session", label: tr("cloud.sessionLabel"), description: `${tr("cloud.sessionDescription", { entries: local.entries.length, size: formatSize(sessionData.byteLength) })} · ${tr("cloud.reuseOnRetry")}`, selected: true },
       ];
       if (hasCredentials) items.push({ id: "credentials", label: tr("cloud.credentialsLabel"), description: tr(reusable ? "cloud.credentialReuse" : "cloud.credentialsDescription"), selected: false });
-      ctx.ui.setStatus("pi-cloud", undefined);
+      setCloudStatus(ctx, undefined);
       const summary = [tr("cloud.projectPath", { path: safeDisplayText(await repositoryRoot(ctx.cwd)) }),
         `${selected.record.baseUrl} · ${runner} · HEAD ${workspace.snapshot.baseline.head.slice(0, 12)}`,
         tr("cloud.projectIntro"), tr("cloud.projectTransfer")];
@@ -529,24 +595,26 @@ export default async function piCloudExtension(pi: ExtensionAPI): Promise<void> 
         artifacts: selectedPayloads.map(({ id, kind, data, contentType }) => ({ id, kind, size: data.length, sha256: sha256(data), contentType })),
         secretIds: [],
       };
+      const submittedSessionPath = join(getAgentDir(), "cloud", taskId, "submitted-session.jsonl");
       const saved: CloudTaskState = { ...localCursor, taskId, workerId: selected.record.workerId, baseUrl: selected.record.baseUrl,
-        fingerprint: selected.record.fingerprint, projectId: ctx.cwd, sessionPath: sessionFile, remoteSession: task.session,
+        fingerprint: selected.record.fingerprint, projectId: ctx.cwd, sessionPath: sessionFile, submittedSessionPath, remoteSession: task.session,
         git: task.git, spec: task, readyToSubmit: false, accepted: false, cursor: 0, status: "queued", prompt, updatedAt: new Date().toISOString() };
       const running = makeActive(saved, selected.connection, ctx);
       active = running;
       lastResult = undefined;
-      await persistTask(saved);
-      pi.appendEntry("pi-cloud-task", { taskId, status: "queued", prompt });
       try {
+        await writePrivateFile(submittedSessionPath, sessionData, true);
+        await persistTask(saved);
+        pi.appendEntry("pi-cloud-task", { taskId, status: "queued", prompt });
         for (const payload of selectedPayloads) {
           if (shuttingDown) return;
-          const reused = await selected.connection.hasArtifact(payload.id);
-          ctx.ui.setStatus("pi-cloud", `${tr(reused ? "cloud.reusing" : "cloud.uploading")} · ${payload.choice} · ${formatSize(payload.data.length)}`);
-          if (!reused) await selected.connection.upload(payload.id, payload.data, payload.contentType);
+          const reused = await selected.connection.hasArtifact(payload.id, controller.signal);
+          setCloudStatus(ctx, `${tr(reused ? "cloud.reusing" : "cloud.uploading")} · ${payload.choice} · ${formatSize(payload.data.length)}`);
+          if (!reused) await selected.connection.upload(payload.id, payload.data, payload.contentType, controller.signal);
         }
         if (shuttingDown) return;
         if (chosen.has("credentials")) {
-          const metadata = reusable ? cached : await selected.connection.uploadSecret(credentialId, credentialData, (cached?.version ?? 0) + 1);
+          const metadata = reusable ? cached : await selected.connection.uploadSecret(credentialId, credentialData, (cached?.version ?? 0) + 1, controller.signal);
           if (!metadata) throw new Error("credential authorization metadata is missing");
           task.secretIds = [credentialId];
           task.environment.secretVersions = [{ id: credentialId, version: metadata.version, sha256: credentialHash, authorized: true }];
@@ -554,20 +622,71 @@ export default async function piCloudExtension(pi: ExtensionAPI): Promise<void> 
         saved.readyToSubmit = true;
         await persistTask(saved);
         if (shuttingDown) return;
-        ctx.ui.setStatus("pi-cloud", tr("cloud.connecting"));
+        setCloudStatus(ctx, tr("cloud.connecting"));
         await connectTask(running, ctx, true);
+        handedOff = true;
       } catch (error) {
+        if (controller.signal.aborted) {
+          if (active === running) {
+            disconnect(running);
+            active = undefined;
+          }
+          saved.status = "aborted";
+          delete saved.error;
+          await persistTask(saved);
+          clearTaskUi(ctx);
+          ctx.ui.setEditorText(prompt);
+          return;
+        }
         if (shuttingDown) return;
-        if (saved.readyToSubmit) connectionFailed(running, ctx, error);
-        else finishTask(running, { taskId, status: "failed", cursor: saved.cursor, result: { taskId, status: "failed", error: detail(error) } }, ctx);
-        throw error;
+        if (saved.readyToSubmit) {
+          connectionFailed(running, ctx, error);
+          throw error;
+        }
+        finishTask(running, { taskId, status: "failed", cursor: saved.cursor, result: { taskId, status: "failed", error: detail(error) } }, ctx);
       }
     } finally {
+      if (submissionAbort === controller) submissionAbort = undefined;
       submitting = false;
-      if (!shuttingDown && !active) ctx.ui.setStatus("pi-cloud", undefined);
+      editorState.locked = !!active;
+      if (!shuttingDown && !active) {
+        setCloudStatus(ctx, undefined);
+        if (!handedOff && prompt && ctx.mode === "tui" && !ctx.ui.getEditorText()) ctx.ui.setEditorText(prompt);
+      }
     }
   };
   register("cloud-submit", "cloud.submitDescription", submitTask);
+
+  if (typeof pi.registerShortcut === "function") {
+    pi.registerShortcut("f6", {
+      description: tr("cloud.submitDescription"),
+      handler: async (ctx) => {
+        if (submitting) {
+          submissionAbort?.abort();
+          return;
+        }
+        if (active) {
+          if (!ctx.hasUI) return;
+          const labels = [tr("cloud.appendChoice"), tr("cloud.localChoice"), tr("cloud.abortChoice"), tr("cloud.reconnectChoice")];
+          const choice = await ctx.ui.select(tr("cloud.appendChoice"), labels);
+          const action = ["cloud-append", "cloud-local", "cloud-abort", "cloud-reconnect"][labels.indexOf(choice ?? "")];
+          if (action) await commands[action]?.("", ctx as ExtensionCommandContext);
+          return;
+        }
+        const text = ctx.ui.getEditorText();
+        if (!text.trim()) return;
+        try {
+          requireIdle(ctx);
+          if (!connectionFor()) throw new Error(tr("cloud.noWorker"));
+        } catch (error) {
+          ctx.ui.notify(detail(error), "error");
+          return;
+        }
+        ctx.ui.setEditorText("");
+        pi.sendUserMessage(`/cloud-submit ${text}`, { expandPromptTemplates: true });
+      },
+    });
+  }
 
   register("cloud-retry", "cloud.retryDescription", async (_args, ctx) => {
     requireIdle(ctx);
@@ -576,6 +695,7 @@ export default async function piCloudExtension(pi: ExtensionAPI): Promise<void> 
     if (!failed || !isTerminal(failed) || failed.status !== "failed") throw new Error(tr("cloud.noRetryableTask"));
     const selected = connectionFor(failed.workerId);
     if (!selected) throw new Error(tr("cloud.noWorker"));
+    if (!ctx.hasUI || !(await ctx.ui.confirm(tr("cloud.retryChoice"), tr("cloud.retryConfirm")))) return;
     ctx.ui.notify(tr("cloud.retryStarting", { taskId: failed.taskId }), "info");
     await submitTask(failed.prompt, ctx, selected.record.workerId);
   });
@@ -584,11 +704,12 @@ export default async function piCloudExtension(pi: ExtensionAPI): Promise<void> 
     if (!active) throw new Error(tr("cloud.noTask"));
     const task = active;
     task.retryBlocked = false;
+    task.reconnectAttempt = 0;
     try { await connectTask(task, ctx); }
     catch (error) { connectionFailed(task, ctx, error); throw error; }
   });
 
-  register("cloud-apply", "cloud.applyDescription", async (args, ctx) => {
+  const applyResult = async (args: string, ctx: ExtensionCommandContext, confirmed = false): Promise<void> => {
     requireIdle(ctx);
     if (active) throw new Error(tr("cloud.taskActive", { taskId: active.state.taskId }));
     const task = resultTask(ctx, "artifactId", args);
@@ -621,7 +742,7 @@ export default async function piCloudExtension(pi: ExtensionAPI): Promise<void> 
         return;
       }
       const preview = truncateHead(safeDisplayText(patches.join("\n")), { maxLines: 100, maxBytes: 10_000 }).content;
-      if (!ctx.hasUI || !(await ctx.ui.confirm(tr("cloud.applyConfirm"), `${preview}\n\n${tr("cloud.reviewSaved", { path: reviewPath })}`))) return;
+      if (!confirmed && (!ctx.hasUI || !(await ctx.ui.confirm(tr("cloud.applyConfirm"), `${preview}\n\n${tr("cloud.reviewSaved", { path: reviewPath })}`)))) return;
       requireIdle(ctx);
       const changed = await applyGitSnapshot(ctx.cwd, snapshot, task.git!);
       task.appliedGit = (await createGitSnapshot(ctx.cwd)).baseline;
@@ -631,9 +752,10 @@ export default async function piCloudExtension(pi: ExtensionAPI): Promise<void> 
     // Native file locks span the complete review/read/modify/write window, in deterministic order.
     const locked = (index = 0): Promise<void> => index === paths.length ? reviewAndApply() : withFileMutationQueue(paths[index]!, () => locked(index + 1));
     await locked();
-  });
+  };
+  register("cloud-apply", "cloud.applyDescription", (args, ctx) => applyResult(args, ctx));
 
-  register("cloud-merge", "cloud.mergeDescription", async (args, ctx) => {
+  const mergeResult = async (args: string, ctx: ExtensionCommandContext, confirmed = false): Promise<void> => {
     requireIdle(ctx);
     if (active) throw new Error(tr("cloud.taskActive", { taskId: active.state.taskId }));
     const task = resultTask(ctx, "sessionArtifactId", args);
@@ -644,19 +766,24 @@ export default async function piCloudExtension(pi: ExtensionAPI): Promise<void> 
     if (!task.git) throw new Error(tr("cloud.gitBaseMissing"));
     if (!(await currentGitMatches(ctx.cwd, task.appliedGit ?? task.git))) throw new Error(tr("result.baseMismatch"));
     const source = exportSessionBranch(ctx.sessionManager);
+    const submitted = task.submittedSessionPath
+      ? parseSessionArchive(await readFile(task.submittedSessionPath, "utf8"))
+      : source;
     const raw = await selected.connection.download(task.sessionArtifactId);
     let remote = parseSessionArchive(raw.toString("utf8"));
     if (task.remoteSession && task.remoteSession.sessionId !== task.sessionId) {
       const empty = { header: { ...remote.header }, entries: [], leafId: null, entriesSha256: sha256("") };
       const tail = mergeSessionTail(empty, remote, task.remoteSession);
-      const entries = [...source.entries, ...tail.entries.map((entry, index) => index === 0 ? { ...entry, parentId: source.leafId } : entry)];
-      remote = parseSessionArchive([JSON.stringify(source.header), ...entries.map((entry) => JSON.stringify(entry))].join("\n"));
+      const entries = [...submitted.entries, ...tail.entries.map((entry, index) => index === 0 ? { ...entry, parentId: submitted.leafId } : entry)];
+      remote = parseSessionArchive([JSON.stringify(submitted.header), ...entries.map((entry) => JSON.stringify(entry))].join("\n"));
     }
-    const merged = mergeSessionTail(source, remote, { sessionId: task.sessionId, baseLeafId: task.baseLeafId, lastEntryId: task.lastEntryId, entriesSha256: task.entriesSha256 });
+    const merged = task.submittedSessionPath
+      ? mergeSessionTailPreservingLocal(source, submitted, remote, { sessionId: task.sessionId, baseLeafId: task.baseLeafId, lastEntryId: task.lastEntryId, entriesSha256: task.entriesSha256 })
+      : mergeSessionTail(source, remote, { sessionId: task.sessionId, baseLeafId: task.baseLeafId, lastEntryId: task.lastEntryId, entriesSha256: task.entriesSha256 });
     const parentSession = ctx.sessionManager.getSessionFile();
     if (parentSession) merged.header.parentSession = parentSession;
     merged.header.cwd = ctx.cwd;
-    if (!ctx.hasUI || !(await ctx.ui.confirm(tr("cloud.mergeChoice"), tr("cloud.mergeConfirm")))) return;
+    if (!confirmed && (!ctx.hasUI || !(await ctx.ui.confirm(tr("cloud.mergeChoice"), tr("cloud.mergeConfirm"))))) return;
     requireIdle(ctx);
     if (exportSessionBranch(ctx.sessionManager).entriesSha256 !== source.entriesSha256 || !(await currentGitMatches(ctx.cwd, task.appliedGit ?? task.git))) throw new Error(tr("cloud.preflightChanged"));
     validateIdentifier(task.taskId);
@@ -667,6 +794,17 @@ export default async function piCloudExtension(pi: ExtensionAPI): Promise<void> 
     await persistTask(task);
     const switched = await ctx.switchSession(path, { withSession: async (next) => { next.ui.notify(tr("cloud.merged"), "info"); } });
     if (switched.cancelled) { delete task.mergedSessionId; await persistTask(task); }
+  };
+  register("cloud-merge", "cloud.mergeDescription", (args, ctx) => mergeResult(args, ctx));
+  register("cloud-receive", "cloud.receiveDescription", async (_args, ctx) => {
+    requireIdle(ctx);
+    if (active) throw new Error(tr("cloud.taskActive", { taskId: active.state.taskId }));
+    const task = lastResult?.artifactId || lastResult?.sessionArtifactId ? lastResult : tasksFor(ctx).findLast((item) => item.artifactId || item.sessionArtifactId);
+    if (!task?.artifactId && !task?.sessionArtifactId) throw new Error(tr("cloud.resultMissing"));
+    if (task.appliedGit && task.mergedSessionId) { ctx.ui.notify(tr("cloud.alreadyMerged"), "info"); return; }
+    if (!ctx.hasUI || !(await ctx.ui.confirm(tr("cloud.receiveChoice"), tr("cloud.receiveConfirm")))) return;
+    if (task.artifactId && !task.appliedGit) await applyResult(task.artifactId, ctx, true);
+    if (task.sessionArtifactId && !task.mergedSessionId) await mergeResult(task.sessionArtifactId, ctx, true);
   });
 
   register("cloud-local", "cloud.localDescription", async (_args, ctx) => {
@@ -737,12 +875,10 @@ export default async function piCloudExtension(pi: ExtensionAPI): Promise<void> 
     const lines = [tr("cloud.connected", { address: selected.record.baseUrl, workerId: worker.workerId }),
       `Pi ${worker.capabilities.piVersion} · ${worker.capabilities.runners.join(", ")} · Docker network: ${worker.capabilities.dockerNetwork ?? "none"}`,
       task ? statusText(task) : tr("cloud.idleStatus")];
-    ctx.ui.setWidget("pi-cloud", lines);
-    ctx.ui.notify(lines[0]!, "info");
+    ctx.ui.notify(lines.join("\n"), "info");
   });
   register("cloud-help", "cloud.helpDescription", async (_args, ctx) => {
-    ctx.ui.setWidget("pi-cloud-help", tr("cloud.helpText").split("\n"));
-    ctx.ui.notify(tr("cloud.helpChoice"), "info");
+    ctx.ui.notify(tr("cloud.helpText"), "info");
   });
   register("cloud-language", "cloud.languageDescription", async (args, ctx) => {
     const choice = args.trim() || (ctx.hasUI ? await ctx.ui.select(tr("cloud.languageChoice"), ["简体中文", "English"]) : undefined);
@@ -785,6 +921,7 @@ export default async function piCloudExtension(pi: ExtensionAPI): Promise<void> 
           if (active) {
             status.push(...safeDisplayText(active.preview).split("\n").slice(-3), tr("cloud.liveHelp"));
             item("watch", "cloud.watchChoice");
+            item("cloud-append", "cloud.appendChoice", "cloud.appendChoice");
             item("cloud-reconnect", "cloud.reconnectChoice", "cloud.reconnectDescription");
             item("cloud-abort", "cloud.abortChoice", "cloud.abortDescription");
           } else {
@@ -792,9 +929,10 @@ export default async function piCloudExtension(pi: ExtensionAPI): Promise<void> 
             if (task?.artifactId || task?.sessionArtifactId) {
               status.push(tr("cloud.reviewNext"));
               if (task.appliedGit) status.push(tr("cloud.filesReceived"));
-              else if (task.artifactId) item("cloud-apply", "cloud.applyChoice", "cloud.applyDescription");
               if (task.mergedSessionId) status.push(tr("cloud.conversationReceived"));
-              else if (task.sessionArtifactId) item("cloud-merge", "cloud.mergeChoice", "cloud.mergeDescription");
+              if ((!task.appliedGit && task.artifactId) || (task.sessionArtifactId && !task.mergedSessionId)) {
+                item("cloud-receive", "cloud.receiveChoice", "cloud.receiveDescription");
+              }
             } else status.push(tr("cloud.projectIntro"), tr("cloud.projectReturn"));
             if (task?.status === "failed") item("cloud-retry", "cloud.retryChoice", "cloud.retryDescription");
             item("cloud-submit", firstProject ? "cloud.firstProject" : "cloud.submitChoice", "cloud.submitDescription");
@@ -830,7 +968,7 @@ export default async function piCloudExtension(pi: ExtensionAPI): Promise<void> 
           if (!choice || choice === "back") continue;
         }
         // A remote task may finish while the menu is open; don't apply an action to a different task.
-        if (["cloud-apply", "cloud-merge", "cloud-retry", "cloud-abort", "cloud-reconnect"].includes(choice)
+        if (["cloud-receive", "cloud-retry", "cloud-abort", "cloud-reconnect", "cloud-append"].includes(choice)
           && task?.taskId !== (active?.state ?? lastResult)?.taskId) continue;
         if (choice === "cloud-submit" || choice === "cloud-retry") {
           try { await assertGitRepository(ctx.cwd); }
@@ -839,21 +977,23 @@ export default async function piCloudExtension(pi: ExtensionAPI): Promise<void> 
         if (choice === "cloud-abort" && !(await ctx.ui.confirm(tr("cloud.abortChoice"), tr("cloud.abortConfirm")))) continue;
         await commands[choice]?.("", ctx);
         // Session switches destroy this context. Task execution returns focus for steering and remote dialogs.
-        if (shuttingDown || (active && ["cloud-submit", "cloud-retry", "cloud-reconnect", "cloud-abort"].includes(choice))) return;
+        if (shuttingDown || (active && ["cloud-submit", "cloud-retry", "cloud-reconnect", "cloud-abort"].includes(choice)) || choice === "cloud-receive") return;
       }
     } finally { wizardOpen = false; }
   });
 
   pi.on("session_start", async (_event, ctx) => {
     shuttingDown = false;
+    installEditor(ctx);
     if (active) disconnect(active);
     active = undefined;
     lastResult = undefined;
+    clearTaskUi(ctx);
     state = await loadClientState();
     const sessionId = ctx.sessionManager.getSessionId();
     const task = tasksFor(ctx).findLast((item) => item.sessionId === sessionId || item.mergedSessionId === sessionId);
     if (!task) return;
-    if (isTerminal(task)) { lastResult = task; showResult(task, ctx); return; }
+    if (isTerminal(task)) { lastResult = task; return; }
     const selected = connectionFor(task.workerId);
     if (!selected) { ctx.ui.notify(tr("cloud.noWorker"), "warning"); return; }
     const running = makeActive(task, selected.connection, ctx);
@@ -861,28 +1001,27 @@ export default async function piCloudExtension(pi: ExtensionAPI): Promise<void> 
     try { await connectTask(running, ctx); ctx.ui.notify(tr("cloud.restored", { taskId: task.taskId }), "info"); }
     catch (error) { connectionFailed(running, ctx, error); }
   });
-  pi.on("input", async (event, ctx) => {
+  const sendFollowUp = async (text: string, ctx: ExtensionContext, delivery: TaskInput["delivery"] = "followUp", images?: TaskInput["images"]): Promise<void> => {
     const task = active;
-    if (!task) {
-      if (lastResult?.status === "completed" && lastResult.sessionArtifactId && !lastResult.mergedSessionId) {
-        ctx.ui.setEditorText(event.text);
-        ctx.ui.notify(tr("cloud.mergeBeforeContinue"), "warning");
-        return { action: "handled" };
-      }
-      return { action: "continue" };
-    }
+    if (!task?.followUp) return;
     try {
-      const input = parseTaskInput({ taskId: task.state.taskId, id: randomUUID(), delivery: event.streamingBehavior ?? "followUp", message: event.text, ...(event.images?.length ? { images: event.images } : {}) });
+      const input = parseTaskInput({ taskId: task.state.taskId, id: randomUUID(), delivery, message: text, ...(images?.length ? { images } : {}) });
       task.state.pendingInputs = [...(task.state.pendingInputs ?? []), input];
       await persistTask(task.state);
-      if (shuttingDown || active !== task) return { action: "handled" };
+      task.followUp = false;
+      if (shuttingDown || active !== task) return;
       sendOutbox(task);
       if (!task.socket) scheduleReconnect(task, ctx);
       showTask(task, ctx);
     } catch (error) {
-      ctx.ui.setEditorText(event.text);
+      ctx.ui.setEditorText(text);
       ctx.ui.notify(tr("cloud.inputInvalid", { message: detail(error) }), "error");
     }
+  };
+  pi.on("input", async (event, ctx) => {
+    if (!active) return { action: "continue" };
+    if (!active.followUp) ctx.ui.setEditorText(event.text);
+    else await sendFollowUp(event.text, ctx, event.streamingBehavior ?? "followUp", event.images);
     return { action: "handled" };
   });
   pi.on("session_before_compact", async (_event, ctx) => {
@@ -893,10 +1032,12 @@ export default async function piCloudExtension(pi: ExtensionAPI): Promise<void> 
     if (active) { ctx.ui.notify(tr("cloud.localWarning"), "warning"); return { cancel: true }; }
     return undefined;
   });
-  pi.on("session_shutdown", async () => {
+  pi.on("session_shutdown", async (_event, ctx) => {
     shuttingDown = true;
     if (active) disconnect(active);
     active = undefined;
+    clearTaskUi(ctx);
+    removeEditor(ctx);
     await persistence;
   });
 }

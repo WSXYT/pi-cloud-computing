@@ -109,7 +109,7 @@ for (const history of [true, false]) {
     await run("git", ["add", "file.txt"], { cwd });
     await run("git", ["commit", "-qm", "initial"], { cwd });
     await saveClientState({ locale: "en", connections: [] }, statePath);
-    await writeFile(join(agentDir, "settings.json"), JSON.stringify({ packages: [], defaultProvider: "test-only-provider", defaultModel: "stub", defaultProjectTrust: "never", quietStartup: true, disableInstallTelemetry: true, analytics: { enabled: false } }));
+    await writeFile(join(agentDir, "settings.json"), JSON.stringify({ packages: [], defaultProvider: "test-only-provider", defaultModel: "stub", defaultProjectTrust: "never", quietStartup: true, disableInstallTelemetry: true, retry: { enabled: false }, analytics: { enabled: false } }));
     await writeFile(join(agentDir, "models.json"), JSON.stringify({ providers: { "test-only-provider": { api: "openai-completions", apiKey: "FAKE_TEST_CREDENTIAL_NOT_A_REAL_KEY", baseUrl: "http://127.0.0.1:9/v1", models: [{ id: "stub" }] } } }));
     await writeFile(join(agentDir, "auth.json"), JSON.stringify({ "test-only-provider": { type: "api_key", key: "FAKE_TEST_CREDENTIAL_NOT_A_REAL_KEY" } }));
     await saveWorkerConfig({ ...defaultWorkerConfig(workerDir), runner: "host", host: "127.0.0.1" });
@@ -123,10 +123,12 @@ for (const history of [true, false]) {
     const pairing = await updateWorkerState(workerDir, (state) => ({ ...createPairing(state), fingerprint: state.certificateFingerprint! }));
     const uploads: string[] = [];
     let submissionConfirmations = 0;
+    let receiveConfirmations = 0;
     const answer = (request: RpcExtensionUIRequest): RpcExtensionUIResponse | undefined => {
       if (request.method === "input") return { type: "extension_ui_response", id: request.id,
         value: request.title.startsWith("1/3") ? "perform the remote task" : `/cloud-pair ${worker.url}/ ${pairing.fingerprint} ${pairing.code}` };
       if (request.method === "confirm") {
+        if (request.title === "View and receive remote results") receiveConfirmations++;
         if (!history && request.title.startsWith("3/3")) {
           assert.equal(uploads.length, 0, "no upload before final consent");
           submissionConfirmations++;
@@ -137,11 +139,12 @@ for (const history of [true, false]) {
       if (request.method === "select") {
         const option = request.options.find((option) => option.startsWith("No Worker yet:")) ||
           request.options.find((option) => option.startsWith("Worker installed:")) ||
+          request.options.find((option) => option === "View and receive remote results") ||
           request.options.find((option) => option === "Review and apply files") ||
           request.options.find((option) => option === "Merge remote conversation") ||
           request.options.find((option) => option.startsWith("Run this project in the cloud")) ||
-          (!history && request.options.find((option) => option.startsWith("☑ Current conversation"))) ||
-          (!history && request.options.find((option) => /^☐ Pi provider credentials/i.test(option))) ||
+          (!history && request.options.find((option) => option.startsWith("[x] Current conversation"))) ||
+          (!history && request.options.find((option) => option.startsWith("[ ] Pi provider credentials"))) ||
           request.options.find((option) => option.startsWith("Next: review"));
         assert.ok(option, JSON.stringify(request));
         return { type: "extension_ui_response", id: request.id, value: option };
@@ -200,6 +203,11 @@ for (const history of [true, false]) {
       events: client.events.slice(-15), stderr: client.stderr, worker: record.events.slice(-5),
     }));
     assert.equal((await loadClientState(statePath)).tasks!.find((item) => item.taskId === task.taskId)!.sessionId, original.sessionId, "local and remote session associations must remain separate");
+    const beforeLockedInput = client.events.length;
+    await client.command({ type: "prompt", message: "ordinary input stays local" });
+    assert.equal(worker.tasks.get(task.taskId)!.inputs.length, 0, "locked input must not be forwarded to cloud");
+    assert.ok(!client.events.slice(beforeLockedInput).some((event) => event.type === "agent_start"), "locked input must not start a local turn");
+    await client.command({ type: "prompt", message: "/cloud-append" });
     await client.command({ type: "prompt", message: "/skill:example raw remote input" });
     await until(() => worker.tasks.get(task.taskId)!.inputs.length === 1, "slash input was not forwarded");
     assert.equal(worker.tasks.get(task.taskId)!.inputs[0]!.message, "/skill:example raw remote input");
@@ -207,6 +215,7 @@ for (const history of [true, false]) {
 
     await client.command({ type: "prompt", message: "/cloud-reconnect" });
     await client.command({ type: "prompt", message: "/cloud-reconnect" });
+    await client.command({ type: "prompt", message: "/cloud-append" });
     await client.command({ type: "prompt", message: "one input after replacing sockets" });
     await until(() => worker.tasks.get(task.taskId)!.inputs.length === 2, "replacement socket lost input");
     await client.stop();
@@ -242,12 +251,12 @@ for (const history of [true, false]) {
     await artifacts.put(resultArtifactId, Buffer.from(JSON.stringify({ baseline: task.git, files, snapshotSha256: snapshotDigest({ baseline: task.git, files }) })), "application/json");
     worker.tasks.settle(task.taskId, "completed", { sessionArtifactId, resultArtifactId });
     await until(async () => (await loadClientState(statePath)).tasks?.find((item) => item.taskId === task.taskId)?.sessionArtifactId === sessionArtifactId, "terminal results not retained");
-    await client.command({ type: "prompt", message: "do not start a local turn before merging" });
-    assert.ok(!client.events.some((event) => event.type === "agent_start"));
+    await client.command({ type: "prompt", message: "continue locally before merging" });
     if (history) {
       await client.command({ type: "prompt", message: "/cloud-apply" });
       await client.command({ type: "prompt", message: "/cloud-merge" });
     } else await client.command({ type: "prompt", message: "/cloud" });
+    if (!history) assert.equal(receiveConfirmations, 1, "combined result receipt must ask for one confirmation");
     assert.equal(await readFile(join(cwd, "file.txt"), "utf8"), "remote\n", JSON.stringify(client.events));
     const merged = await client.state();
     assert.notEqual(merged.sessionId, original.sessionId, JSON.stringify(client.events));
@@ -269,8 +278,7 @@ for (const history of [true, false]) {
 const dockerIntegration = process.env.PI_CLOUD_TEST_DOCKER === "1";
 test(`real Worker Pi (${dockerIntegration ? "docker" : "host"}) restores a provider, skill and tool, forwards its dialog and removes runtime credentials`, {
   timeout: 90_000,
-  // Worker execution is Linux-only. Node 24's Windows native RPC shutdown can abort in libuv (UV_HANDLE_CLOSING); do not reinterpret that nonzero exit as success.
-  skip: process.platform !== "linux" ? "Linux Worker runtime; native Windows/macOS client flows are exercised above" : false,
+  skip: dockerIntegration && process.platform !== "linux" ? "Docker image integration runs on Linux" : false,
 }, async (t) => {
   const root = await realpath(await mkdtemp(join(tmpdir(), "pi-cloud-real-worker-")));
   const cwd = join(root, "repo");
@@ -330,7 +338,7 @@ test(`real Worker Pi (${dockerIntegration ? "docker" : "host"}) restores a provi
   const client = new NativePi(cwd, agentDir, (request) => {
     if (request.method === "confirm") return { type: "extension_ui_response", id: request.id, confirmed: true };
     if (request.method === "select") {
-      const option = request.options.find((option) => /^☐ Pi provider credentials/i.test(option)) ?? request.options.find((option) => option.startsWith("Next: review"));
+      const option = request.options.find((option) => /^\[ \] Pi provider credentials/i.test(option)) ?? request.options.find((option) => option.startsWith("Next: review"));
       assert.ok(option, JSON.stringify(request));
       return { type: "extension_ui_response", id: request.id, value: option };
     }

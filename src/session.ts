@@ -221,6 +221,34 @@ export function mergeSessionTail(
   };
 }
 
+/** Merge the remote result onto the submitted history while retaining later local conversation entries. */
+export function mergeSessionTailPreservingLocal(
+  source: SessionArchive,
+  submitted: SessionArchive,
+  remote: SessionArchive,
+  cursor: SessionCursor,
+): MergedSession {
+  if (source.header.id !== submitted.header.id || submitted.header.id !== cursor.sessionId)
+    throw new Error("source session does not match submitted session");
+  if (submitted.entriesSha256 !== cursor.entriesSha256)
+    throw new Error("submitted session changed since submission");
+  if (source.entries.length < submitted.entries.length || source.entries.slice(0, submitted.entries.length).some((entry, index) => JSON.stringify(entry) !== JSON.stringify(submitted.entries[index])))
+    throw new Error("local session changed before the submitted history");
+  const merged = mergeSessionTail(submitted, remote, cursor);
+  const localTail = source.entries.slice(submitted.entries.length);
+  const ids = new Set(merged.entries.map((entry) => entry.id));
+  const entries = [...merged.entries];
+  for (const [index, entry] of localTail.entries()) {
+    if (ids.has(entry.id)) throw new Error(`local entry collides with remote entry: ${entry.id}`);
+    if (index === 0 && entry.parentId !== submitted.leafId)
+      throw new Error("local session does not continue from the submitted leaf");
+    ids.add(entry.id);
+    entries.push(index === 0 ? { ...entry, parentId: merged.leafId } : entry);
+  }
+  validateSessionEntries(entries);
+  return { ...merged, entries, leafId: entries.at(-1)?.id ?? merged.leafId };
+}
+
 export async function writeMergedSession(
   path: string,
   merged: MergedSession,
