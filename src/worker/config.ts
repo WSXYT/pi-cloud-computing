@@ -30,7 +30,7 @@ export function defaultWorkerConfig(dataDir = defaultDataDir()): WorkerConfig {
     publicIp: envPublicIp(),
     port: 9443,
     locale: detectLocale(),
-    runner: process.env.PI_CLOUD_RUNNER === "host" ? "host" : "docker",
+    runner: process.env.PI_CLOUD_RUNNER === "docker" ? "docker" : "host",
     dockerNetwork:
       process.env.PI_CLOUD_DOCKER_NETWORK === "bridge" ? "bridge" : "none",
     retention: "until-delete",

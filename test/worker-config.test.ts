@@ -5,11 +5,25 @@ import { join } from "node:path";
 import test from "node:test";
 
 import {
+  defaultWorkerConfig,
   loadWorkerConfig,
   saveWorkerConfig,
   setWorkerConfigValue,
 } from "../src/worker/config.js";
 import { loadWorkerState } from "../src/worker/state.js";
+
+test("new Workers default to native execution and honor an explicit Docker choice", async () => {
+  const previous = process.env.PI_CLOUD_RUNNER;
+  try {
+    delete process.env.PI_CLOUD_RUNNER;
+    assert.equal(defaultWorkerConfig().runner, "host");
+    process.env.PI_CLOUD_RUNNER = "docker";
+    assert.equal(defaultWorkerConfig().runner, "docker");
+  } finally {
+    if (previous === undefined) delete process.env.PI_CLOUD_RUNNER;
+    else process.env.PI_CLOUD_RUNNER = previous;
+  }
+});
 
 test("persists worker config and creates state", async () => {
   const dataDir = await mkdtemp(join(tmpdir(), "pi-cloud-worker-"));

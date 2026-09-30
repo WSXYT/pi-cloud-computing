@@ -36,6 +36,8 @@ test("renders native macOS and Windows Worker services", () => {
   assert.match(script, /worker serve/);
   assert.equal(WINDOWS_WORKER_TASK, "PiCloudWorker");
   const task = renderWindowsTask("C:\\Users\\me\\.pi-cloud");
+  assert.match(task, /service-entry\.js/);
+  assert.doesNotMatch(task, /cmd\.exe/);
   assert.match(task, /<LogonType>S4U<\/LogonType>/);
   assert.match(task, /<RunLevel>LeastPrivilege<\/RunLevel>/);
   assert.match(task, /<BootTrigger>/);

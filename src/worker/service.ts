@@ -1,6 +1,7 @@
 import { readdir, rm, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { homedir, userInfo } from "node:os";
+import { fileURLToPath } from "node:url";
 import { writePrivateFile } from "../storage.js";
 
 export interface SystemdUnitOptions {
@@ -94,14 +95,14 @@ export function renderWindowsWorkerScript(options: WindowsWorkerScriptOptions): 
 }
 
 export function renderWindowsTask(dataDir: string): string {
-  const script = windowsWorkerScriptPath(dataDir);
-  windowsQuote(script);
+  const entry = fileURLToPath(new URL("./service-entry.js", import.meta.url));
+  const argumentsText = `${windowsQuote(entry)} ${windowsQuote(dataDir)}`;
   return `<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <Triggers><BootTrigger><Enabled>true</Enabled></BootTrigger></Triggers>
   <Principals><Principal id="Worker"><UserId>${plistQuote(userInfo().username)}</UserId><LogonType>S4U</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>
   <Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy><DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries><StopIfGoingOnBatteries>false</StopIfGoingOnBatteries><StartWhenAvailable>true</StartWhenAvailable><ExecutionTimeLimit>PT0S</ExecutionTimeLimit></Settings>
-  <Actions Context="Worker"><Exec><Command>${plistQuote(join(process.env.SystemRoot ?? "C:\\Windows", "System32", "cmd.exe"))}</Command><Arguments>${plistQuote(`/d /s /c ""${script}""`)}</Arguments><WorkingDirectory>${plistQuote(dataDir)}</WorkingDirectory></Exec></Actions>
+  <Actions Context="Worker"><Exec><Command>${plistQuote(process.execPath)}</Command><Arguments>${plistQuote(argumentsText)}</Arguments><WorkingDirectory>${plistQuote(dataDir)}</WorkingDirectory></Exec></Actions>
 </Task>\n`;
 }
 

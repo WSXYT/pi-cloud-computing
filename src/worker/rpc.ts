@@ -100,7 +100,7 @@ export class PiRpcExecutor {
     if (!this.options.command && envOverrides.PI_CLOUD_BOOTSTRAP)
       args.unshift(envOverrides.PI_CLOUD_BOOTSTRAP);
     const command =
-      this.options.command ?? (envOverrides.PI_CLOUD_BOOTSTRAP ? "node" : "pi");
+      this.options.command ?? (envOverrides.PI_CLOUD_BOOTSTRAP ? (process.platform === "win32" ? process.execPath : "node") : "pi");
     const child = (this.options.runner ?? { spawn }).spawn(command, args, {
       cwd,
       env,
