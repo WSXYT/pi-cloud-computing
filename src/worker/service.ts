@@ -93,6 +93,18 @@ export function renderWindowsWorkerScript(options: WindowsWorkerScriptOptions): 
   ].join("\r\n");
 }
 
+export function renderWindowsTask(dataDir: string): string {
+  const script = windowsWorkerScriptPath(dataDir);
+  windowsQuote(script);
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <Triggers><BootTrigger><Enabled>true</Enabled></BootTrigger></Triggers>
+  <Principals><Principal id="Worker"><UserId>${plistQuote(userInfo().username)}</UserId><LogonType>S4U</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>
+  <Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy><DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries><StopIfGoingOnBatteries>false</StopIfGoingOnBatteries><StartWhenAvailable>true</StartWhenAvailable><ExecutionTimeLimit>PT0S</ExecutionTimeLimit></Settings>
+  <Actions Context="Worker"><Exec><Command>${plistQuote(join(process.env.SystemRoot ?? "C:\\Windows", "System32", "cmd.exe"))}</Command><Arguments>${plistQuote(`/d /s /c ""${script}""`)}</Arguments><WorkingDirectory>${plistQuote(dataDir)}</WorkingDirectory></Exec></Actions>
+</Task>\n`;
+}
+
 export async function writeWindowsWorkerScript(dataDir: string, options: Omit<WindowsWorkerScriptOptions, "dataDir"> = {}): Promise<string> {
   const path = windowsWorkerScriptPath(dataDir);
   await writePrivateFile(path, renderWindowsWorkerScript({ ...options, dataDir }));

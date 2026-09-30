@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { homedir, platform, release } from 'node:os';
-import { delimiter, join, resolve } from 'node:path';
+import { basename, delimiter, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { promisify } from 'node:util';
 
@@ -13,7 +13,15 @@ const root = await mkdtemp(join(process.env.RUNNER_TEMP, 'pi-cloud-native-'));
 const source = resolve('.');
 const cli = join(source, 'dist/src/cli.js');
 const env = { ...process.env, PI_CLOUD_SOURCE_DIR: source, PI_CLOUD_DATA_DIR: join(root, 'worker'), PI_CLOUD_CLIENT_STATE: join(root, 'client.json'), PATH: `${join(source, 'node_modules', '.bin')}${delimiter}${process.env.PATH}` };
-const run = async (command, args) => exec(command, args, { env, timeout: 300_000, maxBuffer: 8 * 1024 * 1024 });
+const run = async (command, args) => {
+  const label = command === process.execPath ? args.slice(1, 3).join(' ') : basename(command);
+  console.log(`START ${label}`);
+  const pending = exec(command, args, { env, timeout: command === 'powershell.exe' || command === 'bash' ? 180_000 : 30_000, maxBuffer: 8 * 1024 * 1024 });
+  pending.child.stdin?.end();
+  const result = await pending;
+  console.log(`DONE ${label}`);
+  return result;
+};
 const cloud = (...args) => run(process.execPath, [cli, ...args]);
 const health = async (expected) => {
   for (let attempt = 0; attempt < 30; attempt++) {

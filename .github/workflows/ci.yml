@@ -30,6 +30,7 @@ jobs:
       - run: npm test
       - run: npm run pack:smoke
       - name: Install, pair, restart and stop the native background service
+        timeout-minutes: 8
         run: node scripts/ci-native-service.mjs
       - if: runner.os != 'Windows'
         run: bash -n scripts/install.sh scripts/ci-install-worker.sh

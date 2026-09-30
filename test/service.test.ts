@@ -9,6 +9,7 @@ import {
   renderLaunchdPlist,
   renderSystemdUnit,
   renderWindowsWorkerScript,
+  renderWindowsTask,
   WINDOWS_WORKER_TASK,
   WORKER_SERVICE_LABEL,
 } from "../src/worker/service.js";
@@ -34,6 +35,11 @@ test("renders native macOS and Windows Worker services", () => {
   assert.match(script, /PI_CLOUD_DATA_DIR=C:\\Users\\me\\\.pi-cloud/);
   assert.match(script, /worker serve/);
   assert.equal(WINDOWS_WORKER_TASK, "PiCloudWorker");
+  const task = renderWindowsTask("C:\\Users\\me\\.pi-cloud");
+  assert.match(task, /<LogonType>S4U<\/LogonType>/);
+  assert.match(task, /<RunLevel>LeastPrivilege<\/RunLevel>/);
+  assert.match(task, /<BootTrigger>/);
+  assert.match(task, /<ExecutionTimeLimit>PT0S<\/ExecutionTimeLimit>/);
 });
 
 test("removes only expired task directories", async () => {

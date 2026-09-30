@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { get } from "node:https";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import { loadClientState, updateClientState } from "../client-state.js";
 import { CloudConnection, normalizeFingerprint } from "../client-network.js";
 import { defaultDataDir, loadWorkerConfig, saveWorkerConfig, setWorkerConfigValue, type WorkerConfig } from "./config.js";
@@ -9,8 +10,8 @@ import { createPairing, revokeToken } from "./pairing.js";
 import { loadWorkerState, updateWorkerState } from "./state.js";
 import { ensureSelfSignedCertificate } from "./tls.js";
 import { startWorkerServer } from "./server.js";
-import { cleanupExpiredTasks, launchdPlistPath, WINDOWS_WORKER_TASK, WORKER_SERVICE_LABEL, writeLaunchdPlist, writeSystemdUnit, writeWindowsWorkerScript } from "./service.js";
-import { ensurePrivateDirectory } from "../storage.js";
+import { cleanupExpiredTasks, launchdPlistPath, renderWindowsTask, WINDOWS_WORKER_TASK, WORKER_SERVICE_LABEL, writeLaunchdPlist, writeSystemdUnit, writeWindowsWorkerScript } from "./service.js";
+import { ensurePrivateDirectory, writePrivateFile } from "../storage.js";
 import { discoverWorkerAddresses } from "./network.js";
 
 const execFileAsync = promisify(execFile);
@@ -19,7 +20,7 @@ const address = (config: WorkerConfig) => `https://${config.publicIp.includes(":
 
 async function runWorkerService(command: "start" | "stop"): Promise<void> {
   if (process.platform === "win32") {
-    await execFileAsync("schtasks.exe", [command === "start" ? "/Run" : "/End", "/TN", WINDOWS_WORKER_TASK], { windowsHide: true });
+    await execFileAsync("schtasks.exe", [command === "start" ? "/Run" : "/End", "/TN", WINDOWS_WORKER_TASK], { windowsHide: true, timeout: 15_000 });
     return;
   }
   if (process.platform === "darwin") {
@@ -180,7 +181,9 @@ export async function runWorkerCli(args: string[], stdout = console.log): Promis
         else if (process.platform === "darwin") stdout(`launchd-plist=${await writeLaunchdPlist(config.dataDir)}`);
         else if (process.platform === "win32") {
           const script = await writeWindowsWorkerScript(config.dataDir);
-          await execFileAsync("schtasks.exe", ["/Create", "/TN", WINDOWS_WORKER_TASK, "/TR", `\"${script}\"`, "/SC", "ONLOGON", "/F"], { windowsHide: true });
+          const taskXml = join(config.dataDir, "worker-task.xml");
+          await writePrivateFile(taskXml, renderWindowsTask(config.dataDir));
+          await execFileAsync("schtasks.exe", ["/Create", "/TN", WINDOWS_WORKER_TASK, "/XML", taskXml, "/F"], { windowsHide: true, timeout: 15_000 });
           stdout(`scheduled-task=${WINDOWS_WORKER_TASK}`);
           stdout(`worker-script=${script}`);
         }
