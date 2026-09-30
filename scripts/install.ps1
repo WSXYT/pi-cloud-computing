@@ -143,8 +143,13 @@ $installOutput = & $node.Source $cli worker install --ip $Ip --service
 if ($LASTEXITCODE -ne 0) { throw 'Worker service installation failed.' }
 & $node.Source $cli worker start
 if ($LASTEXITCODE -ne 0) { throw 'Worker service could not be started.' }
-& $node.Source $cli worker health
-if ($LASTEXITCODE -ne 0) { throw 'Worker health check failed.' }
+$healthy = $false
+for ($attempt = 0; $attempt -lt 30; $attempt++) {
+  & $node.Source $cli worker health
+  if ($LASTEXITCODE -eq 0) { $healthy = $true; break }
+  Start-Sleep -Seconds 1
+}
+if (-not $healthy) { throw 'Worker health check failed. Inspect worker.log in the Worker data directory.' }
 $installOutput = & $node.Source $cli worker pair
 if ($LASTEXITCODE -ne 0) { throw 'Worker started, but could not generate a pairing code.' }
 $installOutput | ForEach-Object { Write-Host $_ }

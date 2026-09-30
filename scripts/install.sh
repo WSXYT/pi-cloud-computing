@@ -297,9 +297,9 @@ if [ "$(uname -s)" = "Linux" ] && command -v ufw >/dev/null 2>&1 && ufw status 2
 fi
 
 health="FAILED"
-for attempt in 1 2 3 4 5; do
+for ((attempt = 1; attempt <= 30; attempt++)); do
   if "$NODE_BIN" "$CLI" worker health >/dev/null 2>&1; then health="OK"; break; fi
-  if [ "$attempt" -lt 5 ]; then sleep 1; fi
+  if [ "$attempt" -lt 30 ]; then sleep 1; fi
 done
 if [ "$health" != "OK" ]; then
   printf '%s\n' 'Worker health check failed. Check the service: journalctl -u pi-cloud-worker (Linux) or launchctl print gui/$(id -u)/com.wsxyt.pi-cloud-worker (macOS). Installation is not ready for pairing.' >&2

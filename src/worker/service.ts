@@ -55,6 +55,8 @@ export function renderLaunchdPlist(options: LaunchdPlistOptions): string {
     "<key>RunAtLoad</key><true/>",
     "<key>KeepAlive</key><true/>",
     "<key>ProcessType</key><string>Background</string>",
+    `<key>StandardOutPath</key><string>${plistQuote(join(options.dataDir, "worker.log"))}</string>`,
+    `<key>StandardErrorPath</key><string>${plistQuote(join(options.dataDir, "worker.log"))}</string>`,
     "<key>Umask</key><integer>63</integer>",
     "</dict></plist>",
     "",
@@ -85,7 +87,8 @@ export function renderWindowsWorkerScript(options: WindowsWorkerScriptOptions): 
     "@echo off",
     "setlocal DisableDelayedExpansion",
     `set "PI_CLOUD_DATA_DIR=${dataDir}"`,
-    `${executable} ${cliPath} worker serve`,
+    `set "PATH=${dirname(options.executable ?? process.execPath)};%PATH%"`,
+    `${executable} ${cliPath} worker serve >> ${windowsQuote(join(dataDir, "worker.log"))} 2>&1`,
     "",
   ].join("\r\n");
 }

@@ -98,6 +98,6 @@ test("installer language command preserves paired connections and fails closed o
   } finally {
     if (previous === undefined) delete process.env.PI_CLOUD_CLIENT_STATE;
     else process.env.PI_CLOUD_CLIENT_STATE = previous;
-    await rm(root, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
   }
 });
