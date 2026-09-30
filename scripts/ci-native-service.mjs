@@ -63,6 +63,10 @@ try {
   console.error(await readFile(join(env.PI_CLOUD_DATA_DIR, 'worker.log'), 'utf8').catch(() => 'Worker log not created'));
   if (process.platform === 'darwin') console.error((await run('launchctl', ['print', `gui/${process.getuid()}/com.wsxyt.pi-cloud-worker`]).catch(e => ({ stdout: e.message }))).stdout);
   if (process.platform === 'win32') console.error((await run('schtasks.exe', ['/Query', '/TN', 'PiCloudWorker', '/V', '/FO', 'LIST']).catch(e => ({ stdout: e.message }))).stdout);
+  if (process.platform === 'win32') {
+    console.error((await run('powershell.exe', ['-NoProfile', '-Command', "Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | Select-Object ProcessId,ParentProcessId,ExecutablePath,CommandLine | ConvertTo-Json"]).catch(e => ({ stdout: e.message }))).stdout);
+    console.error((await run('powershell.exe', ['-NoProfile', '-Command', "Get-ChildItem -LiteralPath $env:PI_CLOUD_DATA_DIR -Force | Select-Object Name,Length | ConvertTo-Json"]).catch(e => ({ stdout: e.message }))).stdout);
+  }
   throw error;
 } finally {
   if (process.platform === 'linux') {
@@ -76,5 +80,5 @@ try {
     await cloud('worker', 'stop').catch(() => {});
     await run('schtasks.exe', ['/Delete', '/TN', 'PiCloudWorker', '/F']).catch(() => {});
   }
-  await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 500 });
+  await rm(root, { recursive: true, force: true, maxRetries: 2, retryDelay: 100 });
 }
