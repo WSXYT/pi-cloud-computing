@@ -16,7 +16,7 @@ const env = { ...process.env, PI_CLOUD_SOURCE_DIR: source, PI_CLOUD_DATA_DIR: jo
 const run = async (command, args) => {
   const label = command === process.execPath ? args.slice(1, 3).join(' ') : basename(command);
   console.log(`START ${label}`);
-  const pending = exec(command, args, { env, timeout: command === 'powershell.exe' || command === 'bash' ? 180_000 : 30_000, maxBuffer: 8 * 1024 * 1024 });
+  const pending = exec(command, args, { env, timeout: command === 'powershell.exe' || command === 'bash' || args.includes('--test') ? 180_000 : 30_000, maxBuffer: 8 * 1024 * 1024 });
   pending.child.stdin?.end();
   const result = await pending;
   console.log(`DONE ${label}`);
@@ -50,6 +50,11 @@ try {
   const client = JSON.parse(await readFile(env.PI_CLOUD_CLIENT_STATE, 'utf8'));
   assert.equal(client.connections.length, 1);
   assert.equal(client.activeWorkerId, before.workerId);
+  env.PI_CLOUD_TEST_SERVICE_URL = args[0];
+  env.PI_CLOUD_TEST_SERVICE_DIR = env.PI_CLOUD_DATA_DIR;
+  console.log((await run(process.execPath, ['--test', '--test-name-pattern=real Worker Pi', join(source, 'dist/test/client-native.test.js')])).stdout);
+  delete env.PI_CLOUD_TEST_SERVICE_URL;
+  delete env.PI_CLOUD_TEST_SERVICE_DIR;
   if (process.platform === 'linux') await run('sudo', ['systemctl', 'stop', 'pi-cloud-worker.service']);
   else await cloud('worker', 'stop');
   await health(false);
@@ -58,7 +63,7 @@ try {
   await health(true);
   assert.equal(JSON.parse((await cloud('worker', 'status')).stdout).workerId, before.workerId);
   await cloud('client', 'pair', ...args);
-  console.log('PASS: installer exit, native background health, pairing/repeat, stop, restart, identity preservation');
+  console.log('PASS: installer exit, native background health, pairing/repeat, real task/tool/dialog/result return, credential cleanup, stop, restart, identity preservation');
 } catch (error) {
   console.error(await readFile(join(env.PI_CLOUD_DATA_DIR, 'worker.log'), 'utf8').catch(error => `Worker log unavailable: ${error.code ?? 'READ_FAILED'}`));
   if (process.platform === 'darwin') console.error((await run('launchctl', ['print', `gui/${process.getuid()}/com.wsxyt.pi-cloud-worker`]).catch(e => ({ stdout: e.message }))).stdout);

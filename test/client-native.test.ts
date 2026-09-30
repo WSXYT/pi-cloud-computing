@@ -21,6 +21,7 @@ import { defaultWorkerConfig, saveWorkerConfig } from "../src/worker/config.js";
 import { createPairing } from "../src/worker/pairing.js";
 import { startWorkerServer } from "../src/worker/server.js";
 import { updateWorkerState } from "../src/worker/state.js";
+import { loadTaskRecords } from "../src/worker/task-store.js";
 
 type NativeEvent = JsonAgentSessionEvent | RpcExtensionUIRequest | RpcResponse | { type: "extension_error"; error: string };
 const cli = fileURLToPath(new URL("./cli.js", import.meta.resolve("@earendil-works/pi-coding-agent")));
@@ -283,7 +284,9 @@ test(`real Worker Pi (${dockerIntegration ? "docker" : "host"}) restores a provi
   const root = await realpath(await mkdtemp(join(tmpdir(), "pi-cloud-real-worker-")));
   const cwd = join(root, "repo");
   const agentDir = join(root, "agent");
-  const workerDir = join(root, "worker");
+  const serviceUrl = process.env.PI_CLOUD_TEST_SERVICE_URL;
+  const workerDir = serviceUrl ? process.env.PI_CLOUD_TEST_SERVICE_DIR! : join(root, "worker");
+  assert.ok(workerDir, "Service acceptance requires its isolated Worker directory");
   const requests: Array<{ authorization?: string; body: string }> = [];
   const provider = createServer(async (request, response) => {
     const chunks: Buffer[] = [];
@@ -332,9 +335,10 @@ test(`real Worker Pi (${dockerIntegration ? "docker" : "host"}) restores a provi
       }
     });
   `);
-  await saveWorkerConfig({ ...defaultWorkerConfig(workerDir), runner: dockerIntegration ? "docker" : "host", dockerNetwork: dockerIntegration ? "bridge" : "none", host: "127.0.0.1" });
-  // Exercise the production bootstrap and default runner/image, not a test-only command override.
-  const worker = await startWorkerServer({ dataDir: workerDir, publicIp: "127.0.0.1", port: 0, piVersion: VERSION, nodeVersion: process.version, gitVersion: "git" });
+  if (!serviceUrl) await saveWorkerConfig({ ...defaultWorkerConfig(workerDir), runner: dockerIntegration ? "docker" : "host", dockerNetwork: dockerIntegration ? "bridge" : "none", host: "127.0.0.1" });
+  // The service acceptance uses the installed background service, not an in-process substitute.
+  const worker = serviceUrl ? undefined : await startWorkerServer({ dataDir: workerDir, publicIp: "127.0.0.1", port: 0, piVersion: VERSION, nodeVersion: process.version, gitVersion: "git" });
+  const records = async () => worker ? worker.tasks.exportState() : loadTaskRecords(workerDir);
   const client = new NativePi(cwd, agentDir, (request) => {
     if (request.method === "confirm") return { type: "extension_ui_response", id: request.id, confirmed: true };
     if (request.method === "select") {
@@ -346,16 +350,16 @@ test(`real Worker Pi (${dockerIntegration ? "docker" : "host"}) restores a provi
   });
   t.after(async () => {
     await client.stop();
-    await worker.close();
+    await worker?.close();
     provider.closeAllConnections();
     await new Promise<void>((resolve) => provider.close(() => resolve()));
     await rm(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
   });
   const pairing = await updateWorkerState(workerDir, (state) => ({ ...createPairing(state), fingerprint: state.certificateFingerprint! }));
-  await client.command({ type: "prompt", message: `/cloud-pair ${worker.url} ${pairing.fingerprint} ${pairing.code}` });
+  await client.command({ type: "prompt", message: `/cloud-pair ${serviceUrl ?? worker!.url} ${pairing.fingerprint} ${pairing.code}` });
   await client.command({ type: "prompt", message: "/cloud-submit run the synced tool, then reply" });
-  await until(() => worker.tasks.exportState().some((record) => ["completed", "failed", "aborted"].includes(record.status)), JSON.stringify(client.events));
-  const record = worker.tasks.exportState()[0]!;
+  await until(async () => (await records()).some((record) => ["completed", "failed", "aborted"].includes(record.status)), JSON.stringify(client.events));
+  const record = (await records())[0]!;
   assert.equal(record.status, "completed", JSON.stringify({ result: record.result, tail: record.events.slice(-10) }));
   assert.equal(requests.length, 2, JSON.stringify(record.events));
   assert.ok(requests.every((request) => request.authorization === "Bearer CLOUD_TEST_KEY"));
