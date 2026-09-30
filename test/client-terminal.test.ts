@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -17,6 +19,10 @@ import type { TaskSpec } from "../src/protocol.js";
 // Real Pi's interactive mode through POSIX PTY / Windows ConPTY, not RPC or a mock editor.
 test("real terminal locks input, routes literal append, handles resize and releases the editor", { timeout: 60_000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), "pi-cloud-terminal-"));
+  for (const args of [["init", "-q"], ["config", "user.name", "Terminal fixture"], ["config", "user.email", "test@example.com"]]) await promisify(execFile)("git", args, { cwd: root });
+  await writeFile(join(root, ".gitignore"), "agent/\nworker/\nsession.jsonl\n");
+  await promisify(execFile)("git", ["add", ".gitignore"], { cwd: root });
+  await promisify(execFile)("git", ["commit", "-qm", "fixture"], { cwd: root });
   const agentDir = join(root, "agent");
   await mkdir(agentDir);
   const worker = await startWorkerServer({ dataDir: join(root, "worker"), publicIp: "127.0.0.1", port: 0, piVersion: "0.85.1", nodeVersion: process.version, gitVersion: "git", enableExecution: false });
@@ -65,6 +71,11 @@ test("real terminal locks input, routes literal append, handles resize and relea
     await until(() => output.includes("input area is released"));
     terminal.write("LOCAL_DRAFT");
     await until(() => output.includes("LOCAL_DRAFT"));
+    terminal.write("\x1b[17~");
+    await until(() => output.includes("Git workspace"));
+    terminal.write("\x1b");
+    await delay(300);
+    assert.equal(worker.tasks.exportState().length, 1, "cancelled F6 preflight must not create another task");
   } finally {
     terminal.kill();
     await Promise.race([exit, delay(3000)]);

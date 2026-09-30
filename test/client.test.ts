@@ -285,6 +285,10 @@ test("registers F6 as the cloud submit shortcut", async () => {
     await saveClientState({ ...(await loadClientState()), shortcut: "f9" });
     await extension(fake);
     assert.equal(shortcut, "f9", "only the persisted cloud key is registered after reload");
+    await saveClientState({ ...(await loadClientState()), shortcut: "disabled" });
+    shortcut = undefined;
+    await extension(fake);
+    assert.equal(shortcut, undefined, "disabled means no cloud shortcut is registered");
   } finally {
     if (previous === undefined) delete process.env.PI_CLOUD_CLIENT_STATE;
     else process.env.PI_CLOUD_CLIENT_STATE = previous;

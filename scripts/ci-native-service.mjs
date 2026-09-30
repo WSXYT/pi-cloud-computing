@@ -12,7 +12,7 @@ const exec = promisify(execFile);
 const root = await mkdtemp(join(process.env.RUNNER_TEMP, 'pi-cloud-native-'));
 const source = resolve('.');
 const cli = join(source, 'dist/src/cli.js');
-const env = { ...process.env, PI_CLOUD_SOURCE_DIR: source, PI_CLOUD_DATA_DIR: join(root, 'worker'), PI_CLOUD_CLIENT_STATE: join(root, 'client.json'), PATH: `${join(source, 'node_modules', '.bin')}${delimiter}${process.env.PATH}` };
+const env = { ...process.env, PI_CLOUD_SOURCE_DIR: source, PI_CLOUD_DATA_DIR: join(root, 'worker'), PI_CLOUD_CLIENT_STATE: join(root, 'client.json'), PI_CODING_AGENT_DIR: join(root, 'client-agent'), PATH: `${join(source, 'node_modules', '.bin')}${delimiter}${process.env.PATH}` };
 const run = async (command, args) => {
   const label = command === process.execPath ? args.slice(1, 3).join(' ') : basename(command);
   console.log(`START ${label}`);
@@ -45,7 +45,13 @@ try {
   const pairLine = stdout.split(/\r?\n/).find(line => line.startsWith('pair-command=/cloud-pair '));
   assert.ok(pairLine, 'Missing complete pairing command');
   const args = pairLine.slice('pair-command=/cloud-pair '.length).split(' ');
-  await cloud('client', 'pair', ...args);
+  assert.ok(stdout.includes('client-command-posix=') && stdout.includes('client-command-powershell='), 'Both verified one-click commands are required');
+  assert.ok(stdout.includes(process.env.GITHUB_SHA), 'Installer commands must pin this exact commit');
+  if (process.platform === 'win32') {
+    await run('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', join(source, 'scripts/install.ps1'), '-Role', 'client', '-Language', 'en', '-PairUrl', args[0], '-Fingerprint', args[1], '-Code', args[2], '-Revision', process.env.GITHUB_SHA]);
+  } else {
+    await run('bash', [join(source, 'scripts/install.sh'), '--client', '--lang', 'en', '--yes', '--pair-url', args[0], '--fingerprint', args[1], '--code', args[2], '--revision', process.env.GITHUB_SHA]);
+  }
   await cloud('client', 'pair', ...args); // Used code must not be redeemed twice.
   const client = JSON.parse(await readFile(env.PI_CLOUD_CLIENT_STATE, 'utf8'));
   assert.equal(client.connections.length, 1);

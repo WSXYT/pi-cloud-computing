@@ -12,7 +12,7 @@ const [mode, directory] = process.argv.slice(2);
 assert.ok(['produce', 'verify'].includes(mode) && directory);
 const root = await mkdtemp(join(tmpdir(), 'pi-cloud-cross-'));
 const git = (cwd, ...args) => promisify(execFile)('git', args, { cwd });
-const archive = entries => parseSessionArchive(Buffer.from(entries.map(value => JSON.stringify(value)).join('\n') + '\n'));
+const archive = entries => parseSessionArchive(entries.map(value => JSON.stringify(value)).join('\n') + '\n');
 try {
   if (mode === 'produce') {
     const cwd = join(root, 'repo');
@@ -35,7 +35,7 @@ try {
     assert.equal(files.length, 3, 'Windows, macOS and Linux artifacts are all required');
     for (const file of files) {
       const fixture = JSON.parse(await readFile(join(directory, file), 'utf8'));
-      const workspace = parseWorkspaceArchive(Buffer.from(fixture.workspace));
+      const workspace = parseWorkspaceArchive(fixture.workspace);
       const cwd = join(root, fixture.platform);
       await materializeWorkspaceArchive(workspace, cwd);
       assert.deepEqual(await readFile(join(cwd, 'binary.dat')), Buffer.from([0, 255, 13, 10, 128]));
@@ -45,8 +45,8 @@ try {
       // this fixture's repository identity, after checking every content baseline.
       await applyGitSnapshot(cwd, { ...fixture.result, baseline: local.baseline });
       assert.equal(await readFile(join(cwd, '文件.txt'), 'utf8'), `after ${fixture.platform}\n`);
-      const submitted = parseSessionArchive(Buffer.from(fixture.submitted));
-      const remote = parseSessionArchive(Buffer.from(fixture.remote));
+      const submitted = parseSessionArchive(fixture.submitted);
+      const remote = parseSessionArchive(fixture.remote);
       const merged = mergeSessionTail(submitted, remote, { sessionId: submitted.header.id, baseLeafId: submitted.leafId, lastEntryId: submitted.leafId, entriesSha256: submitted.entriesSha256 });
       assert.deepEqual(merged.entries.map(entry => entry.id), ['base', 'remote']);
       console.log(`PASS artifact compatibility: ${fixture.platform} -> ${process.platform}; Unicode/binary files, guarded result apply, native session tail`);

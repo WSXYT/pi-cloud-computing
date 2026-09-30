@@ -67,7 +67,8 @@ export default async function piCloudExtension(pi: ExtensionAPI): Promise<void> 
   let state = await loadClientState();
   let locale = detectLocale(state.locale);
   const shortcut = state.shortcut ?? "f6";
-  const tr = (key: MessageKey, params: Record<string, string | number> = {}) => translate(locale, key, { shortcut: shortcut.toUpperCase(), ...params });
+  const shortcutLabel = shortcut === "disabled" ? "/cloud" : shortcut.toUpperCase();
+  const tr = (key: MessageKey, params: Record<string, string | number> = {}) => translate(locale, key, { shortcut: shortcutLabel, ...params });
   let abortWaitTimer: ReturnType<typeof setTimeout> | undefined;
   let active: ActiveTask | undefined;
   let lastResult: CloudTaskState | undefined;
@@ -87,7 +88,7 @@ export default async function piCloudExtension(pi: ExtensionAPI): Promise<void> 
     editorContext = ctx;
     if (ctx.mode !== "tui" || (ownEditor && ctx.ui.getEditorComponent() === ownEditor)) return;
     previousEditor = ctx.ui.getEditorComponent();
-    ownEditor = (tui, theme, keybindings) => new CloudEditor(tui, theme, keybindings, () => editorState,
+    ownEditor = (tui, theme, keybindings) => new CloudEditor(tui, theme, keybindings, () => ({ ...editorState, locked: editorState.locked && shortcut !== "disabled" }),
       (text) => editorContext!.ui.theme.fg("accent", text), () => {
         if (!active || !editorContext) return;
         active.followUp = false;
@@ -164,7 +165,7 @@ export default async function piCloudExtension(pi: ExtensionAPI): Promise<void> 
     const info = statusText(task.state);
     editorState.locked = true;
     editorState.append = task.followUp;
-    setCloudStatus(ctx, task.followUp ? tr("cloud.appendReady") : `${shortcut.toUpperCase()} · ${info}`);
+    setCloudStatus(ctx, task.followUp ? tr("cloud.appendReady") : `${shortcutLabel} · ${info}`);
     if (ctx.mode === "tui" && ownEditor && ctx.ui.getEditorComponent() === ownEditor) return;
     ctx.ui.setWidget("pi-cloud", [
       `☁ Pi Cloud · ${info}`,
@@ -692,7 +693,7 @@ export default async function piCloudExtension(pi: ExtensionAPI): Promise<void> 
   };
   register("cloud-submit", "cloud.submitDescription", submitTask);
 
-  if (typeof pi.registerShortcut === "function") {
+  if (shortcut !== "disabled" && typeof pi.registerShortcut === "function") {
     pi.registerShortcut(shortcut, {
       description: tr("cloud.submitDescription"),
       handler: async (ctx) => {

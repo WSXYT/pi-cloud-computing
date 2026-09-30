@@ -44,7 +44,7 @@ export interface CloudTaskState {
   error?: string;
 }
 
-export const CLOUD_SHORTCUTS = ["f6", "f7", "f8", "f9", "f10", "f11", "f12"] as const;
+export const CLOUD_SHORTCUTS = ["f6", "f7", "f8", "f9", "f10", "f11", "f12", "disabled"] as const;
 
 export interface CloudClientState {
   locale?: Locale;
