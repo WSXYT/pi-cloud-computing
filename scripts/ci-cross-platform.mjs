@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { createGitSnapshot, createGitResultSnapshot, createWorkspaceArchive, materializeWorkspaceArchive, parseWorkspaceArchive, serializeWorkspaceArchive } from '../dist/src/git.js';
+import { createGitSnapshot, createGitResultSnapshot, createWorkspaceArchive, materializeWorkspaceArchive, parseWorkspaceArchive, serializeWorkspaceArchive, snapshotDigest, validateGitSnapshot } from '../dist/src/git.js';
 import { applyGitSnapshot } from '../dist/src/result.js';
 import { mergeSessionTail, parseSessionArchive, serializeSessionArchive } from '../dist/src/session.js';
 
@@ -43,7 +43,10 @@ try {
       for (const key of ['head', 'indexHash', 'worktreeHash']) assert.equal(local.baseline[key], fixture.result.baseline[key]);
       // The consumer is a new CI checkout, not the sender's absolute path. Rebind only
       // this fixture's repository identity, after checking every content baseline.
-      await applyGitSnapshot(cwd, { ...fixture.result, baseline: local.baseline });
+      validateGitSnapshot(fixture.result);
+      const rebound = { ...fixture.result, baseline: local.baseline };
+      rebound.snapshotSha256 = snapshotDigest(rebound);
+      await applyGitSnapshot(cwd, rebound);
       assert.equal(await readFile(join(cwd, '文件.txt'), 'utf8'), `after ${fixture.platform}\n`);
       const submitted = parseSessionArchive(fixture.submitted);
       const remote = parseSessionArchive(fixture.remote);

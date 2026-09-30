@@ -63,7 +63,7 @@ try {
 
 追加模式中的 `/cloud-abort ...`、其他 `/...` 或 `!...` **按文字发送**，不会被误当成本地管理命令。F6 菜单也提供返回本地、停止、重连。远程工具需要确认时会显示原生 Pi 对话框。
 
-默认快捷键是 F6。若终端或其他扩展占用该键，先检查 `/hotkeys`，在 **`/cloud → 更多 → 云端快捷键`** 选择未使用的 F6–F12。保存后重新加载扩展，实际注册的按键同步显示在 `/hotkeys`。
+默认快捷键是 F6。若终端或其他扩展占用该键，先检查 `/hotkeys`，在 **`/cloud → 更多 → 云端快捷键`** 选择未使用的 F6–F12，或选择 `disabled` 禁用。保存后重新加载扩展，实际注册的按键同步显示在 `/hotkeys`。禁用时通过 `/cloud` 操作，普通文字仍被输入事件保护，不会自动发给模型。
 
 ### 一次清晰的上传授权
 
@@ -146,7 +146,7 @@ Unverified/dirty source checkouts do not emit installer links; use a verified in
 - During execution the input area shows progress and is locked by default. **F6 → Append instruction** explicitly enables remote input; Enter sends it, Esc preserves the draft and returns to progress.
 - Slash-prefixed and bang-prefixed instructions in append mode are sent **literally**, not interpreted as local commands. Remote authorization uses native Pi dialogs.
 - Completion/failure releases the editor; you may continue locally before receiving results.
-- Choose an unused F6–F12 through **`/cloud → More → Cloud shortcut`**. Check conflicts in `/hotkeys` first; saving reloads extensions and updates the actual registered shortcut.
+- Choose an unused F6–F12 through **`/cloud → More → Cloud shortcut`**. Check conflicts in `/hotkeys` first; saving reloads extensions and updates the actual registered shortcut. Choose `disabled` to use `/cloud` instead; ordinary text is still protected by the input hook.
 
 Uploads contain an independent task copy. Runtime synchronization includes plugins/packages, skills, prompts, themes and redacted provider configuration. Git history can still contain committed secrets even when credential sharing is disabled. Explicitly authorized credentials are TLS-pinned, encrypted at rest, temporarily materialized for execution and cleaned up afterward; revoke them through `/cloud`.
 

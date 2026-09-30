@@ -23,6 +23,8 @@
     "scripts/install.sh",
     "scripts/install.ps1",
     "README.md",
+    "ACCEPTANCE.md",
+    "RELEASING.md",
     "LICENSE"
   ],
   "pi": {
