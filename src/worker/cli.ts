@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { get } from "node:https";
+import { rm } from "node:fs/promises";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
@@ -15,7 +16,7 @@ import { ensurePrivateDirectory, writePrivateFile } from "../storage.js";
 import { discoverWorkerAddresses } from "./network.js";
 
 const execFileAsync = promisify(execFile);
-const usage = "Usage: pi-cloud worker <install|serve|pair|ips|status|health|tokens|token revoke ID|tls rotate|cleanup|start|stop> | config set <key> <value> | client language <zh-CN|en> | client pair <https-url> <fingerprint> <one-time-code>";
+const usage = "Usage: pi-cloud worker <install|serve|pair|ips|status|health|tokens|token revoke ID|tls rotate|cleanup|start|stop|uninstall> | config set <key> <value> | client language <zh-CN|en> | client pair <https-url> <fingerprint> <one-time-code>";
 const address = (config: WorkerConfig) => `https://${config.publicIp.includes(":") ? `[${config.publicIp}]` : config.publicIp}:${config.port}`;
 
 async function runWorkerService(command: "start" | "stop"): Promise<void> {
@@ -216,6 +217,20 @@ export async function runWorkerCli(args: string[], stdout = console.log): Promis
   if (command === "cleanup") {
     if (config.retention !== "days" || !config.retentionDays) { stdout("retention=until-delete"); return 0; }
     stdout(JSON.stringify({ removed: await cleanupExpiredTasks(config.dataDir, config.retentionDays) }));
+    return 0;
+  }
+  if (command === "uninstall") {
+    await runWorkerService("stop").catch(() => {});
+    if (process.platform === "win32") {
+      await execFileAsync("schtasks.exe", ["/Delete", "/TN", WINDOWS_WORKER_TASK, "/F"], { windowsHide: true, timeout: 15_000 });
+    } else if (process.platform === "darwin") {
+      await rm(launchdPlistPath(), { force: true });
+    } else {
+      await execFileAsync("systemctl", ["disable", "pi-cloud-worker.service"]);
+      await rm("/etc/systemd/system/pi-cloud-worker.service", { force: true });
+      await execFileAsync("systemctl", ["daemon-reload"]);
+    }
+    stdout("worker uninstalled; source, configuration, credentials and task data preserved");
     return 0;
   }
   if (command === "start" || command === "stop") {

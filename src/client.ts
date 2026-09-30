@@ -10,6 +10,7 @@ import { Markdown } from "@earendil-works/pi-tui";
 import type WebSocket from "ws";
 
 import { CloudEditor, type CloudEditorState } from "./client-editor.js";
+import { cachedResultArtifact } from "./client-results.js";
 import { sha256 } from "./environment.js";
 import { scanEnvironment } from "./environment-archive.js";
 import { detectLocale, translate, type MessageKey } from "./i18n.js";
@@ -209,6 +210,13 @@ export default async function piCloudExtension(pi: ExtensionAPI): Promise<void> 
     if (result.sessionArtifactId) task.state.sessionArtifactId = result.sessionArtifactId;
     if (result.error) task.state.error = result.error;
   };
+  const resultBytes = (task: CloudTaskState, kind: "git" | "session"): Promise<Buffer> => {
+    validateIdentifier(task.taskId);
+    const id = kind === "git" ? task.artifactId : task.sessionArtifactId;
+    if (!id) throw new Error(tr("cloud.resultMissing"));
+    return cachedResultArtifact(join(getAgentDir(), "cloud", task.taskId), kind, id,
+      () => connectionFor(task.workerId)!.connection.download(id));
+  };
   const finishTask = (task: ActiveTask, snapshot: TaskSnapshot, ctx: ExtensionContext): void => {
     if (active !== task) return;
     task.state.status = snapshot.status;
@@ -220,6 +228,16 @@ export default async function piCloudExtension(pi: ExtensionAPI): Promise<void> 
     pi.appendEntry("pi-cloud-task", { taskId: task.state.taskId, status: task.state.status });
     checkpoint(task.state, ctx);
     showResult(task.state, ctx);
+    if (task.state.artifactId || task.state.sessionArtifactId) {
+      void Promise.all([
+        ...(task.state.artifactId ? [resultBytes(task.state, "git")] : []),
+        ...(task.state.sessionArtifactId ? [resultBytes(task.state, "session")] : []),
+      ]).then(() => {
+        if (!shuttingDown) ctx.ui.notify(tr("cloud.resultCached"), "info");
+      }).catch(() => {
+        if (!shuttingDown) ctx.ui.notify(tr("cloud.resultCacheFailed"), "warning");
+      });
+    }
   };
   const sendOutbox = (task: ActiveTask): void => {
     if (!task.socket || task.socket.readyState !== 1 || !task.accepted) return;
@@ -756,18 +774,17 @@ export default async function piCloudExtension(pi: ExtensionAPI): Promise<void> 
     catch (error) { connectionFailed(task, ctx, error); throw error; }
   });
 
-  const applyResult = async (args: string, ctx: ExtensionCommandContext, confirmed = false): Promise<void> => {
+  const applyResult = async (args: string, ctx: ExtensionCommandContext, receive = false): Promise<boolean> => {
     requireIdle(ctx);
     if (active) throw new Error(tr("cloud.taskActive", { taskId: active.state.taskId }));
     const task = resultTask(ctx, "artifactId", args);
-    const selected = task && connectionFor(task.workerId);
-    if (!task?.artifactId || !selected) throw new Error(tr("cloud.resultMissing"));
+    if (!task?.artifactId) throw new Error(tr("cloud.resultMissing"));
     if (!task.git) throw new Error(tr("cloud.gitBaseMissing"));
-    const raw = await selected.connection.download(task.artifactId);
+    const raw = await resultBytes(task, "git");
     const snapshot = parseGitSnapshot(raw.toString("utf8"));
     const root = await repositoryRoot(ctx.cwd);
     const paths = (await Promise.all(snapshot.files.map((file) => safeFilePath(root, file.path)))).sort();
-    const reviewAndApply = async (): Promise<void> => {
+    const reviewAndApply = async (): Promise<boolean> => {
       if (!(await currentGitMatches(ctx.cwd, task.git!))) throw new Error(tr("result.baseMismatch"));
       const patches: string[] = [];
       for (const file of snapshot.files) {
@@ -782,32 +799,32 @@ export default async function piCloudExtension(pi: ExtensionAPI): Promise<void> 
       await writePrivateFile(reviewPath, patches.join("\n"));
       await writePrivateFile(join(getAgentDir(), "cloud", task.taskId, "result.json"), raw);
       ctx.ui.notify(tr("cloud.reviewSaved", { path: reviewPath }), "info");
+      const preview = truncateHead(safeDisplayText(patches.join("\n")), { maxLines: 100, maxBytes: 10_000 }).content;
+      if (!ctx.hasUI || !(await ctx.ui.confirm(tr(receive ? "cloud.receiveChoice" : "cloud.applyConfirm"), `${receive ? tr("cloud.receiveConfirm") + "\n\n" : ""}${preview}\n\n${tr("cloud.reviewSaved", { path: reviewPath })}`))) return false;
       if (!snapshot.files.length) {
         if (task.git) task.appliedGit = task.git;
         await persistTask(task);
         ctx.ui.notify(tr("cloud.noChanges"), "info");
-        return;
+        return true;
       }
-      const preview = truncateHead(safeDisplayText(patches.join("\n")), { maxLines: 100, maxBytes: 10_000 }).content;
-      if (!confirmed && (!ctx.hasUI || !(await ctx.ui.confirm(tr("cloud.applyConfirm"), `${preview}\n\n${tr("cloud.reviewSaved", { path: reviewPath })}`)))) return;
       requireIdle(ctx);
       const changed = await applyGitSnapshot(ctx.cwd, snapshot, task.git!);
       task.appliedGit = (await createGitSnapshot(ctx.cwd)).baseline;
       await persistTask(task);
       ctx.ui.notify(tr("cloud.applied", { count: changed.length }), "info");
+      return true;
     };
     // Native file locks span the complete review/read/modify/write window, in deterministic order.
-    const locked = (index = 0): Promise<void> => index === paths.length ? reviewAndApply() : withFileMutationQueue(paths[index]!, () => locked(index + 1));
-    await locked();
+    const locked = (index = 0): Promise<boolean> => index === paths.length ? reviewAndApply() : withFileMutationQueue(paths[index]!, () => locked(index + 1));
+    return locked();
   };
-  register("cloud-apply", "cloud.applyDescription", (args, ctx) => applyResult(args, ctx));
+  register("cloud-apply", "cloud.applyDescription", async (args, ctx) => { await applyResult(args, ctx); });
 
   const mergeResult = async (args: string, ctx: ExtensionCommandContext, confirmed = false): Promise<void> => {
     requireIdle(ctx);
     if (active) throw new Error(tr("cloud.taskActive", { taskId: active.state.taskId }));
     const task = resultTask(ctx, "sessionArtifactId", args);
-    const selected = task && connectionFor(task.workerId);
-    if (!task?.sessionArtifactId || !selected) throw new Error(tr("cloud.sessionResultMissing"));
+    if (!task?.sessionArtifactId) throw new Error(tr("cloud.sessionResultMissing"));
     if (task.mergedSessionId) { ctx.ui.notify(tr("cloud.alreadyMerged"), "info"); return; }
     if (task.sessionId !== ctx.sessionManager.getSessionId()) throw new Error(tr("cloud.sessionMismatch"));
     if (!task.git) throw new Error(tr("cloud.gitBaseMissing"));
@@ -816,7 +833,7 @@ export default async function piCloudExtension(pi: ExtensionAPI): Promise<void> 
     const submitted = task.submittedSessionPath
       ? parseSessionArchive(await readFile(task.submittedSessionPath, "utf8"))
       : source;
-    const raw = await selected.connection.download(task.sessionArtifactId);
+    const raw = await resultBytes(task, "session");
     let remote = parseSessionArchive(raw.toString("utf8"));
     if (task.remoteSession && task.remoteSession.sessionId !== task.sessionId) {
       const empty = { header: { ...remote.header }, entries: [], leafId: null, entriesSha256: sha256("") };
@@ -849,9 +866,16 @@ export default async function piCloudExtension(pi: ExtensionAPI): Promise<void> 
     const task = lastResult?.artifactId || lastResult?.sessionArtifactId ? lastResult : tasksFor(ctx).findLast((item) => item.artifactId || item.sessionArtifactId);
     if (!task?.artifactId && !task?.sessionArtifactId) throw new Error(tr("cloud.resultMissing"));
     if (task.appliedGit && task.mergedSessionId) { ctx.ui.notify(tr("cloud.alreadyMerged"), "info"); return; }
-    if (!ctx.hasUI || !(await ctx.ui.confirm(tr("cloud.receiveChoice"), tr("cloud.receiveConfirm")))) return;
-    if (task.artifactId && !task.appliedGit) await applyResult(task.artifactId, ctx, true);
-    if (task.sessionArtifactId && !task.mergedSessionId) await mergeResult(task.sessionArtifactId, ctx, true);
+    if (task.sessionArtifactId && !task.mergedSessionId) await resultBytes(task, "session");
+    if (task.artifactId && !task.appliedGit) {
+      if (!await applyResult(task.artifactId, ctx, true)) return;
+    } else if (!ctx.hasUI || !(await ctx.ui.confirm(tr("cloud.receiveChoice"), tr("cloud.receiveConfirm")))) return;
+    try {
+      if (task.sessionArtifactId && !task.mergedSessionId) await mergeResult(task.sessionArtifactId, ctx, true);
+    } catch (error) {
+      if (task.appliedGit) ctx.ui.notify(tr("cloud.receivePartial"), "warning");
+      throw error;
+    }
   });
 
   register("cloud-local", "cloud.localDescription", async (_args, ctx) => {

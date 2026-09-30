@@ -69,7 +69,12 @@ try {
   await health(true);
   assert.equal(JSON.parse((await cloud('worker', 'status')).stdout).workerId, before.workerId);
   await cloud('client', 'pair', ...args);
-  console.log('PASS: installer exit, native background health, pairing/repeat, real task/tool/dialog/result return, credential cleanup, stop, restart, identity preservation');
+  const preserved = await Promise.all(['config.json', 'state.json', 'master.key'].map(async name => [name, await readFile(join(env.PI_CLOUD_DATA_DIR, name))]));
+  if (process.platform === 'linux') await run('sudo', ['env', `PI_CLOUD_DATA_DIR=${env.PI_CLOUD_DATA_DIR}`, process.execPath, cli, 'worker', 'uninstall']);
+  else await cloud('worker', 'uninstall');
+  await health(false);
+  for (const [name, bytes] of preserved) assert.ok(bytes.equals(await readFile(join(env.PI_CLOUD_DATA_DIR, name))), `${name} must survive uninstall unchanged`);
+  console.log('PASS: both installers, native background health, pairing/repeat, real task/tool/dialog/result return, credential cleanup, stop, restart, identity preservation, uninstall preserving private data');
 } catch (error) {
   console.error(await readFile(join(env.PI_CLOUD_DATA_DIR, 'worker.log'), 'utf8').catch(error => `Worker log unavailable: ${error.code ?? 'READ_FAILED'}`));
   if (process.platform === 'darwin') console.error((await run('launchctl', ['print', `gui/${process.getuid()}/com.wsxyt.pi-cloud-worker`]).catch(e => ({ stdout: e.message }))).stdout);

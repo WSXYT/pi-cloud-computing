@@ -90,7 +90,9 @@ try {
 
 ### 查看并接收结果
 
-`/cloud → 查看并接收云端结果`（或 `/cloud-receive`）统一处理文件与对话，只确认一次：
+完成后自动校验并保存结果副本到本机，但不应用文件或切换对话；保存失败会明确提示重新获取，输入区仍释放。已保存的结果可离线接收。
+
+`/cloud → 查看并接收云端结果`（或 `/cloud-receive`）先展示实际文件差异，再统一确认文件与对话，只确认一次：
 
 1. 校验本地 Git baseline；提交后文件改变则拒绝覆盖。
 2. 应用文件，保留可审阅的补丁和原始结果。
@@ -110,6 +112,7 @@ node <CLI路径> worker health
 node <CLI路径> worker pair
 node <CLI路径> worker start
 node <CLI路径> worker stop
+node <CLI路径> worker uninstall
 node <CLI路径> worker tokens
 node <CLI路径> worker token revoke TOKEN_ID
 ```
@@ -119,6 +122,8 @@ node <CLI路径> worker token revoke TOKEN_ID
 | Linux | systemd `pi-cloud-worker.service` | `journalctl -u pi-cloud-worker`；启停需要 sudo |
 | macOS | 用户 launchd `com.wsxyt.pi-cloud-worker` | `~/.pi-cloud/worker.log`；用户登录时加载，不依赖原终端窗口 |
 | Windows | Task Scheduler `PiCloudWorker`，S4U、最低权限 | `~/.pi-cloud/worker.log`；注册需要适当权限；无需保持交互登录；S4U 不提供网络共享/域凭据 |
+
+`worker uninstall` 停止并注销后台服务，保留源码、任务、配置、证书和凭据；删除这些数据是另外的显式操作。Linux 卸载需要 sudo。
 
 重跑相同角色安装器即可更新：只做 fast-forward，不重置有修改/分叉的 checkout，不清空现有连接、任务、证书或 token。固定 commit 安装遇到不同版本会要求独立源码目录，不会偷偷切换已有源码。损坏的状态会报错并保留原文件。
 
@@ -156,11 +161,11 @@ Automatic reconnect is limited to **five retries**, **10 seconds per attempt**, 
 
 `/cloud-retry` creates a **new task on the original Worker**, preserves the failed record and requests fresh consent; external effects may repeat. `/cloud-cancel` cancels preparation/upload rather than merely hiding its UI.
 
-Choose **View and receive remote results** in `/cloud`, or run `/cloud-receive`. One confirmation applies baseline-checked files and merges the native session. Local conversation added since submission is retained. Originals, review patches, submitted-session copies and result artifacts remain available. Repeating after partial success handles only unfinished phases. Local file changes prevent overwrite. `/cloud-apply` and `/cloud-merge` remain compatibility commands; receipt can be deferred while you work locally.
+Completed results are automatically validated and cached locally, without applying files or switching sessions; validated cached results remain usable offline. A cache failure offers refetch, not task re-execution. Choose **View and receive remote results** in `/cloud`, or run `/cloud-receive`. The actual file diff is shown before one confirmation applies baseline-checked files and merges the native session. Local conversation added since submission is retained. Originals, review patches, submitted-session copies and result artifacts remain available. Repeating after partial success handles only unfinished phases. Local file changes prevent overwrite. `/cloud-apply` and `/cloud-merge` remain compatibility commands; receipt can be deferred while you work locally.
 
 ### Operations and security
 
-Use `node <CLI> worker status|health|pair|start|stop`, where `<CLI>` is `~/.pi-cloud/source/dist/src/cli.js`. Linux uses systemd (sudo for service management), macOS uses a user launchd agent loaded at login, and Windows uses a least-privilege S4U scheduled task without an interactive-login requirement. Closing the installer terminal does not stop the Worker. macOS/Windows logs are in the Worker data directory's `worker.log`; Linux uses `journalctl -u pi-cloud-worker`.
+Use `node <CLI> worker status|health|pair|start|stop|uninstall`, where `<CLI>` is `~/.pi-cloud/source/dist/src/cli.js`. Linux uses systemd (sudo for service management), macOS uses a user launchd agent loaded at login, and Windows uses a least-privilege S4U scheduled task without an interactive-login requirement. Closing the installer terminal does not stop the Worker. `worker uninstall` stops/unregisters the service while retaining source, task data, configuration, certificates and credentials; Linux requires sudo. macOS/Windows logs are in the Worker data directory's `worker.log`; Linux uses `journalctl -u pi-cloud-worker`.
 
 Native host tasks run with the service account's permissions, **not inside a security sandbox**. Windows S4U does not grant network-share/domain credentials. Linux Docker is an explicit optional isolation mode with explicit egress consent. Windows private writes fail closed on ACL setup failure. Never bypass certificate mismatches. Updates preserve state, refuse destructive checkout resets, and fail on corrupt recovery data rather than silently resetting it.
 

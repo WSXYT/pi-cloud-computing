@@ -129,7 +129,10 @@ for (const history of [true, false]) {
       if (request.method === "input") return { type: "extension_ui_response", id: request.id,
         value: request.title.startsWith("1/3") ? "perform the remote task" : `/cloud-pair ${worker.url}/ ${pairing.fingerprint} ${pairing.code}` };
       if (request.method === "confirm") {
-        if (request.title === "View and receive remote results") receiveConfirmations++;
+        if (request.title === "View and receive remote results") {
+          receiveConfirmations++;
+          assert.ok(request.message.includes("file.txt") && request.message.includes("remote"), "unified receipt must show the actual file diff before consent");
+        }
         if (!history && request.title.startsWith("3/3")) {
           assert.equal(uploads.length, 0, "no upload before final consent");
           submissionConfirmations++;
