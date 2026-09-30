@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
-import { homedir, platform, release } from 'node:os';
+import { arch, cpus, homedir, platform, release } from 'node:os';
 import { basename, delimiter, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { promisify } from 'node:util';
@@ -32,7 +32,7 @@ const health = async (expected) => {
   throw new Error(`Worker health did not become ${expected}`);
 };
 try {
-  console.log(`Native service acceptance: ${platform()} ${release()}, Node ${process.version}, commit ${process.env.GITHUB_SHA}`);
+  console.log(`Native service acceptance: ${platform()} ${release()} ${arch()}, CPU ${cpus()[0]?.model ?? 'unreported'}, Node ${process.version}, commit ${process.env.GITHUB_SHA}`);
   if (process.platform === 'win32') {
     await run('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', join(source, 'scripts/install.ps1'), '-Role', 'worker', '-Language', 'en', '-Ip', '127.0.0.1', '-Revision', process.env.GITHUB_SHA]);
   } else {

@@ -17,7 +17,8 @@ import { startWorkerServer } from "../src/worker/server.js";
 import type { TaskSpec } from "../src/protocol.js";
 
 // Real Pi's interactive mode through POSIX PTY / Windows ConPTY, not RPC or a mock editor.
-test("real terminal locks input, routes literal append, handles resize and releases the editor", { timeout: 60_000 }, async () => {
+for (const mode of ["regular", "fullscreen"] as const) {
+test(`real terminal (${mode}) locks input, routes literal append, handles resize and releases the editor`, { timeout: 60_000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), "pi-cloud-terminal-"));
   for (const args of [["init", "-q"], ["config", "user.name", "Terminal fixture"], ["config", "user.email", "test@example.com"]]) await promisify(execFile)("git", args, { cwd: root });
   await writeFile(join(root, ".gitignore"), "agent/\nworker/\nsession.jsonl\n");
@@ -37,11 +38,11 @@ test("real terminal locks input, routes literal append, handles resize and relea
   const task: TaskSpec = { taskId: "terminal-task", projectId: root, prompt: "Terminal fixture", runner: "host", environment: { piVersion: "0.85.1", nodeVersion: "24", platform: process.platform, packages: [], resources: [], providers: [], secretVersions: [], warnings: [] }, git: { repositoryHash: "repo", head: "head", indexHash: "index", worktreeHash: "tree", includedPaths: [] }, session: { sessionId, baseLeafId: null, lastEntryId: null, entriesSha256: "empty" }, artifacts: [], secretIds: [] };
   worker.tasks.create(task);
   await saveClientState({ locale: "en", activeWorkerId: paired.workerId, connections: [{ ...paired, baseUrl: worker.url, fingerprint: state.certificateFingerprint!, pairedAt: new Date().toISOString() }], tasks: [{ ...task.session, taskId: task.taskId, workerId: paired.workerId, baseUrl: worker.url, fingerprint: state.certificateFingerprint!, projectId: root, cursor: 0, status: "queued", prompt: task.prompt, updatedAt: new Date().toISOString(), accepted: true }] }, join(agentDir, "pi-cloud.json"));
-  await writeFile(join(agentDir, "settings.json"), JSON.stringify({ packages: [], defaultProvider: "fixture", defaultModel: "stub", defaultProjectTrust: "trusted", quietStartup: true, disableInstallTelemetry: true, analytics: { enabled: false } }));
+  await writeFile(join(agentDir, "settings.json"), JSON.stringify({ packages: [], theme: mode === "regular" ? "dark" : "light", defaultProvider: "fixture", defaultModel: "stub", defaultProjectTrust: "always", quietStartup: true, disableInstallTelemetry: true, analytics: { enabled: false } }));
   await writeFile(join(agentDir, "models.json"), JSON.stringify({ providers: { fixture: { api: "openai-completions", apiKey: "fixture", baseUrl: "http://127.0.0.1:1/v1", models: [{ id: "stub" }] } } }));
   const env = Object.fromEntries(Object.entries(process.env).filter(([key, value]) => value !== undefined && /^(path|pathext|systemroot|windir|comspec|temp|tmp|home|userprofile|appdata|localappdata|lang|lc_all)$/i.test(key))) as Record<string, string>;
   const cli = fileURLToPath(new URL("./cli.js", import.meta.resolve("@earendil-works/pi-coding-agent")));
-  const terminal = spawn(process.execPath, [cli, "--no-extensions", "--no-skills", "--no-prompt-templates", "--no-themes", "-e", fileURLToPath(new URL("../../src/client.ts", import.meta.url)), "--session", sessionFile], { cwd: root, cols: 100, rows: 30, name: "xterm-256color", env: { ...env, TERM: "xterm-256color", PI_CODING_AGENT_DIR: agentDir, PI_CLOUD_CLIENT_STATE: join(agentDir, "pi-cloud.json") } });
+  const terminal = spawn(process.execPath, [cli, "--no-extensions", "--no-skills", "--no-prompt-templates", "--no-themes", "-e", fileURLToPath(new URL("../../src/client.ts", import.meta.url)), "--session", sessionFile, "--tui-mode", mode], { cwd: root, cols: 100, rows: 30, name: "xterm-256color", env: { ...env, TERM: "xterm-256color", PI_CODING_AGENT_DIR: agentDir, PI_CLOUD_CLIENT_STATE: join(agentDir, "pi-cloud.json") } });
   let output = "";
   let exited = false;
   terminal.onData(data => { output += data; });
@@ -83,3 +84,4 @@ test("real terminal locks input, routes literal append, handles resize and relea
     await rm(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
   }
 });
+}
