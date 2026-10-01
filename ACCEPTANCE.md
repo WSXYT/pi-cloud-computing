@@ -4,6 +4,8 @@ A passing unit test, an installed service descriptor, or a skipped job is not pl
 
 ## Latest complete automated gate
 
+The finalization run on `e12676a` exposed a macOS duplicate-start race. Fix `033895810b9800948d11fd0f13760018092759b7` passed [all seven jobs in run 36807606641](https://github.com/WSXYT/pi-cloud-computing/actions/runs/36807606641). Repeated launchd start preserves the running PID, and a per-directory lifetime lease rejects duplicate Workers before task recovery can mutate live state. `worker-instance.test.ts` verifies rejection and a subsequent clean restart. This later result supersedes the failed finalization attempt; no failed run was reinterpreted as success.
+
 Commit `994ecd12ec92f18778e560294a288f7f8ba54641` passed [CI run 36762715581](https://github.com/WSXYT/pi-cloud-computing/actions/runs/36762715581). All **seven** jobs passed: Windows 101/101 tests, Linux/macOS 100/100, zero skips, both terminal modes, both installers, real installed-service tasks, data-preserving uninstall, all nine artifact combinations and validated result caching/receipt. Subsequent commits, including documentation finalization, still require their own complete CI run.
 
 ## Recorded environments
