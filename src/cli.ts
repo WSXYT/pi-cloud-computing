@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 
 import { runWorkerCli } from "./worker/cli.js";
+import { CLOUD_VERSION } from "./version.js";
 
 const args = process.argv.slice(2);
 
 if (args[0] === "--version" || args[0] === "-v") {
-  console.log("0.2.0");
+  console.log(CLOUD_VERSION);
 } else {
   runWorkerCli(args)
     .then((code) => {

@@ -92,10 +92,12 @@ export function attachTaskWebSocket(
             sendState(socket, event.taskId);
         }
       })
-      .catch(() => {
-        // Don't acknowledge or stream state which failed durable persistence/auth validation.
-        for (const socket of sockets.keys())
+      .catch((error: unknown) => {
+        // Deliver a safe failure diagnosis, never acknowledge unpersisted events as durable.
+        for (const socket of sockets.keys()) {
+          send(socket, { type: "error", error: error instanceof PiCloudError ? error.toProtocol() : { code: "INTERNAL_ERROR", retryable: false } });
           socket.close(1011, "Worker state unavailable");
+        }
       });
   });
   const revocationCheck = setInterval(() => {
@@ -134,9 +136,12 @@ export function attachTaskWebSocket(
     socket.on("message", (raw) => {
       messages = messages.then(async () => {
         let requestType: ClientFrame["type"] | undefined;
+        let decoded = false;
+        let mayHaveStarted = false;
         try {
           if (!(await authorized(socket))) return;
           const frame = parseFrame(raw.toString());
+          decoded = true;
           if (frame.type === "hello") {
             send(socket, {
               type: "hello_ack",
@@ -149,8 +154,10 @@ export function attachTaskWebSocket(
               options.enforceRunner &&
               !identity.capabilities.runners.includes(frame.task.runner)
             )
-              throw new Error("requested runner is not enabled on this Worker");
+              throw new PiCloudError("RUNNER_UNAVAILABLE", "Requested runner is not enabled on this Worker");
+            await options.flush?.(); // Never start work while durable state is unavailable.
             client.tasks.add(frame.task.taskId);
+            mayHaveStarted = true;
             const record = tasks.create(frame.task);
             await options.flush?.();
             send(socket, {
@@ -238,9 +245,13 @@ export function attachTaskWebSocket(
           send(socket, {
             type: "error",
             ...(requestType ? { requestType } : {}),
-            error: error instanceof PiCloudError ? error.toProtocol() : {
-              code: error instanceof Error && error.message === "task not found" ? "TASK_NOT_FOUND" : "INVALID_FRAME",
-              retryable: false,
+            error: {
+              ...(error instanceof PiCloudError ? error.toProtocol() : {
+                code: !decoded ? "INVALID_FRAME" : error instanceof Error && error.message === "task not found" ? "TASK_NOT_FOUND"
+                  : error instanceof Error && error.message === "task is not active" ? "TASK_NOT_ACTIVE" : "INTERNAL_ERROR",
+                retryable: false,
+              }),
+              params: { ...(error instanceof PiCloudError ? error.params : {}), phase: decoded ? "handle_request" : "decode_frame", mayHaveStarted },
             },
           });
         }

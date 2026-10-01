@@ -18,7 +18,8 @@ import type { TaskSpec } from "../src/protocol.js";
 
 // Real Pi's interactive mode through POSIX PTY / Windows ConPTY, not RPC or a mock editor.
 for (const mode of ["regular", "fullscreen"] as const) {
-test(`real terminal (${mode}) locks input, routes literal append, handles resize and releases the editor`, { timeout: 60_000 }, async () => {
+for (const outcome of ["completed", "abort"] as const) {
+test(`real terminal (${mode}, ${outcome}) streams output, routes literal append and releases the editor`,  { timeout: 60_000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), "pi-cloud-terminal-"));
   for (const args of [["init", "-q"], ["config", "user.name", "Terminal fixture"], ["config", "user.email", "test@example.com"]]) await promisify(execFile)("git", args, { cwd: root });
   await writeFile(join(root, ".gitignore"), "agent/\nworker/\nsession.jsonl\n");
@@ -47,12 +48,19 @@ test(`real terminal (${mode}) locks input, routes literal append, handles resize
   let exited = false;
   terminal.onData(data => { output += data; });
   const exit = new Promise<void>(resolve => terminal.onExit(() => { exited = true; resolve(); }));
-  const until = async (predicate: () => boolean) => {
-    for (let n = 0; n < 200; n++) { if (predicate()) return; if (exited) break; await delay(50); }
+  const until = async (predicate: () => boolean, budgetMs = 10_000) => {
+    for (let n = 0; n < budgetMs / 50; n++) { if (predicate()) return; if (exited) break; await delay(50); }
     assert.fail(`Terminal did not reach expected state:\n${output.slice(-12000)}`);
   };
   try {
-    await until(() => output.includes("F6"));
+    // Cold Pi/JIT startup competes with native Worker tests; UI action waits remain 10s.
+    await until(() => output.includes("Esc stop"), 30_000);
+    worker.tasks.log(task.taskId, { rpc: { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "LIVE_DELTA_中文" } } });
+    await until(() => output.includes("LIVE_DELTA_中文"));
+    worker.tasks.log(task.taskId, { rpc: { type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "REMOTE_FINAL_TRANSCRIPT" }] } } });
+    await until(() => output.includes("REMOTE_FINAL_TRANSCRIPT"));
+    worker.tasks.log(task.taskId, { rpc: { type: "tool_execution_end", toolName: "fixture", isError: true, result: { content: [{ type: "text", text: "REMOTE_TOOL_FAILURE" }] } } });
+    await until(() => output.includes("REMOTE_TOOL_FAILURE"));
     terminal.write("MUST_NOT_SEND\r");
     await delay(300);
     assert.equal(worker.tasks.exportState()[0]!.inputs.length, 0);
@@ -68,7 +76,10 @@ test(`real terminal (${mode}) locks input, routes literal append, handles resize
     await until(() => worker.tasks.exportState()[0]!.inputs.length === 1);
     assert.equal(worker.tasks.exportState()[0]!.inputs[0]!.message, "/cloud-abort 中文 literal");
     assert.ok(["queued", "running"].includes(worker.tasks.exportState()[0]!.status), "literal slash input must not abort the task through a local cloud command");
-    worker.tasks.settle(task.taskId, "completed");
+    if (outcome === "abort") {
+      terminal.write("\x1b");
+      await until(() => worker.tasks.get(task.taskId)?.status === "aborted");
+    } else worker.tasks.settle(task.taskId, "completed");
     await until(() => output.includes("input area is released"));
     terminal.write("LOCAL_DRAFT");
     await until(() => output.includes("LOCAL_DRAFT"));
@@ -84,4 +95,5 @@ test(`real terminal (${mode}) locks input, routes literal append, handles resize
     await rm(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
   }
 });
+}
 }

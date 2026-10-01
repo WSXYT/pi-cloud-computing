@@ -94,13 +94,13 @@ export class PiRpcExecutor {
       GIT_TERMINAL_PROMPT: "0",
       PI_SKIP_VERSION_CHECK: "1",
     });
-    if (process.platform === "win32" && !this.options.command && envOverrides.PI_CLOUD_BOOTSTRAP) {
+    if (record.task.runner === "host" && !this.options.command && envOverrides.PI_CLOUD_BOOTSTRAP) {
       env.PI_CLOUD_PI_ENTRY = fileURLToPath(new URL("./bundle/cli.js", import.meta.resolve("@earendil-works/pi-coding-agent")));
     }
     if (!this.options.command && envOverrides.PI_CLOUD_BOOTSTRAP)
       args.unshift(envOverrides.PI_CLOUD_BOOTSTRAP);
     const command =
-      this.options.command ?? (envOverrides.PI_CLOUD_BOOTSTRAP ? (process.platform === "win32" ? process.execPath : "node") : "pi");
+      this.options.command ?? (envOverrides.PI_CLOUD_BOOTSTRAP ? (record.task.runner === "host" ? process.execPath : "node") : "pi");
     const child = (this.options.runner ?? { spawn }).spawn(command, args, {
       cwd,
       env,

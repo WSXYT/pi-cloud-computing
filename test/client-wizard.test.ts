@@ -28,7 +28,7 @@ for (const locale of ["en", "zh-CN"] as const) {
     const commands = new Map<string, (args: string, ctx: ExtensionCommandContext) => Promise<void>>();
     const fake = {
       registerCommand(name: string, options: { handler: (args: string, ctx: ExtensionCommandContext) => Promise<void> }) { commands.set(name, options.handler); },
-      registerEntryRenderer() {}, on() {},
+      registerEntryRenderer() {}, registerMessageRenderer() {}, sendMessage() {}, on() {},
     } as unknown as ExtensionAPI;
     const pair = t.mock.method(CloudConnection.prototype, "pair", async () => { throw new Error("unexpected network request"); });
     const screens: Array<{ title: string; choices: string[] }> = [];

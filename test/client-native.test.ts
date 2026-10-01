@@ -10,6 +10,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import test from "node:test";
+import WebSocket from "ws";
 
 import { SessionManager, VERSION, type JsonAgentSessionEvent, type RpcCommand, type RpcExtensionUIRequest, type RpcExtensionUIResponse, type RpcResponse, type SessionEntry } from "@earendil-works/pi-coding-agent";
 import { loadClientState, saveClientState } from "../src/client-state.js";
@@ -125,6 +126,7 @@ for (const history of [true, false]) {
     const uploads: string[] = [];
     let submissionConfirmations = 0;
     let receiveConfirmations = 0;
+    let unauthenticatedConsents = 0;
     const answer = (request: RpcExtensionUIRequest): RpcExtensionUIResponse | undefined => {
       if (request.method === "input") return { type: "extension_ui_response", id: request.id,
         value: request.title.startsWith("1/3") ? "perform the remote task" : `/cloud-pair ${worker.url}/ ${pairing.fingerprint} ${pairing.code}` };
@@ -149,8 +151,10 @@ for (const history of [true, false]) {
           request.options.find((option) => option.startsWith("Run this project in the cloud")) ||
           (!history && request.options.find((option) => option.startsWith("[x] Current conversation"))) ||
           (!history && request.options.find((option) => option.startsWith("[ ] Pi provider credentials"))) ||
-          request.options.find((option) => option.startsWith("Next: review"));
+          request.options.find((option) => option.startsWith("Next: review")) ||
+          request.options.find((option) => option === "Confirm: the selected model endpoint needs no authentication");
         assert.ok(option, JSON.stringify(request));
+        if (option === "Confirm: the selected model endpoint needs no authentication") unauthenticatedConsents++;
         return { type: "extension_ui_response", id: request.id, value: option };
       }
       return undefined;
@@ -184,11 +188,32 @@ for (const history of [true, false]) {
       }));
       assert.equal(worker.tasks.exportState().length, 0, "no task may run before uploads finish");
       const failed = (await loadClientState(statePath)).tasks![0]!;
+      assert.equal(failed.requestFailure?.operation, "artifact_upload");
+      assert.equal(failed.requestFailure?.artifactKind, "workspace");
+      assert.ok(failed.error?.includes("Phase:"), "the transfer failure must say which phase failed");
+      await delay(250);
+      assert.equal((await loadClientState(statePath)).tasks?.length, 1, "failed uploads must not automatically create another task");
       await client.stop();
       client = new NativePi(cwd, agentDir, answer, ["-c"]);
       clients.push(client);
       await client.state();
+      const send = WebSocket.prototype.send;
+      let delayedHello = false;
+      const delayed = t.mock.method(WebSocket.prototype, "send", function (this: WebSocket, data: Parameters<WebSocket["send"]>[0], ...args: unknown[]) {
+        if (!delayedHello && typeof data === "string" && data.startsWith('{"type":"hello_ack"')) {
+          delayedHello = true;
+          setTimeout(() => { if (this.readyState === WebSocket.OPEN) Reflect.apply(send, this, [data, ...args]); }, 750).unref();
+          return;
+        }
+        Reflect.apply(send, this, [data, ...args]);
+      });
       await client.command({ type: "prompt", message: "/cloud-retry" });
+      await until(() => delayedHello, "test did not reach delayed handshake");
+      await client.command({ type: "prompt", message: "/cloud-abort" });
+      await until(async () => (await loadClientState(statePath)).tasks?.some(item => item.taskId !== failed.taskId && item.status === "aborted" && !item.accepted && !item.finalizing) === true, "cancelling before task_create did not preserve the local aborted state");
+      assert.equal(worker.tasks.exportState().length, 0, "cancelling during handshake must not create and then abort a remote task");
+      delayed.mock.restore();
+      await client.command({ type: "prompt", message: "/cloud-submit perform the remote task" });
       assert.ok((await loadClientState(statePath)).tasks?.some((item) => item.taskId === failed.taskId && item.status === "failed"), "retry retains failed-task history");
       assert.equal(uploads.filter((url) => url.startsWith("/artifacts/environment-")).length, 1, "retry reuses the already uploaded environment");
     }
@@ -201,6 +226,7 @@ for (const history of [true, false]) {
     assert.equal(task.runner, "host");
     assert.equal(task.artifacts.some((artifact) => artifact.kind === "session"), history);
     assert.equal(task.secretIds.length, history ? 0 : 1, "credentials must require an explicit toggle and confirmation");
+    assert.equal(unauthenticatedConsents > 0, history, "unchecked credentials require a separate explicit declaration of an unauthenticated model endpoint");
     assert.ok((await readFile(originalPath, "utf8")).includes(original.sessionId));
     await until(async () => !!(await loadClientState(statePath)).tasks?.find((item) => item.taskId === task.taskId)?.accepted, async () => JSON.stringify({
       error: "submission acknowledgement not persisted", saved: (await loadClientState(statePath)).tasks?.map(({ taskId, accepted, status, cursor, error }) => ({ taskId, accepted, status, cursor, error })),
@@ -227,10 +253,10 @@ for (const history of [true, false]) {
     client = new NativePi(cwd, agentDir, answer, ["-c"]);
     clients.push(client);
     assert.equal((await client.state()).sessionId, original.sessionId, "pi -c must find first-command checkpoint");
-    await until(() => client.events.some((event) => event.type === "extension_ui_request" && event.method === "setWidget" && event.widgetLines?.some((line) => line.includes("offline reply"))), "missed assistant output was not replayed");
+    await until(() => client.events.some((event) => event.type === "message_end" && JSON.stringify(event).includes("offline reply")), "missed assistant output was not replayed as a visible transcript message");
     const entries = await client.command({ type: "get_entries" });
     assert.ok(entries.success && entries.command === "get_entries");
-    const live = entries.data.entries.filter((entry) => entry.type === "custom" && entry.customType === "pi-cloud-live");
+    const live = entries.data.entries.filter((entry) => entry.type === "custom_message" && entry.customType === "pi-cloud-live" && entry.display);
     assert.ok(live.some((entry) => JSON.stringify(entry).includes("offline reply")));
     assert.ok(!JSON.stringify(live).includes("UNSAFE"));
 
@@ -296,8 +322,12 @@ test(`real Worker Pi (${dockerIntegration ? "docker" : "host"}) restores a provi
     for await (const chunk of request) chunks.push(Buffer.from(chunk));
     requests.push({ ...(request.headers.authorization ? { authorization: request.headers.authorization } : {}), body: Buffer.concat(chunks).toString("utf8") });
     response.writeHead(200, { "content-type": "text/event-stream" });
+    if (requests.length === 3) {
+      response.write(`data: ${JSON.stringify({ id: "cancel-test", object: "chat.completion.chunk", model: "stub", created: 1, choices: [{ index: 0, delta: { role: "assistant", content: "WAITING_FOR_ABORT" }, finish_reason: null }] })}\n\n`);
+      return; // A real Pi process stays in a streaming request until cloud-abort terminates it.
+    }
     const first = requests.length === 1;
-    const delta = first ? { role: "assistant", tool_calls: [{ index: 0, id: "call-synced", type: "function", function: { name: "synced_write", arguments: JSON.stringify({ text: "real Worker file change\n" }) } }] } : { role: "assistant", content: "real Worker reply" };
+    const delta = first ? { role: "assistant", tool_calls: [{ index: 0, id: "call-synced", type: "function", function: { name: "synced_write", arguments: JSON.stringify({ text: "real Worker file change\n" }) } }] } : { role: "assistant", content: requests.length > 3 ? "LOCAL_REPLY_AFTER_CANCEL" : "real Worker reply" };
     for (const [content, finish] of [[delta, null], [{}, first ? "tool_calls" : "stop"]]) {
       response.write(`data: ${JSON.stringify({ id: "completion-test", object: "chat.completion.chunk", model: "stub", created: 1, choices: [{ index: 0, delta: content, finish_reason: finish }] })}\n\n`);
     }
@@ -352,8 +382,11 @@ test(`real Worker Pi (${dockerIntegration ? "docker" : "host"}) restores a provi
     return undefined;
   });
   t.after(async () => {
+    t.diagnostic(`cleanup: ${requests.length} provider requests; ${JSON.stringify((await records()).map(item => ({ status: item.status, finalizing: item.finalizing })))}`);
     await client.stop();
+    t.diagnostic("cleanup: client stopped");
     await worker?.close();
+    t.diagnostic("cleanup: Worker stopped");
     provider.closeAllConnections();
     await new Promise<void>((resolve) => provider.close(() => resolve()));
     await rm(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
@@ -379,5 +412,24 @@ test(`real Worker Pi (${dockerIntegration ? "docker" : "host"}) restores a provi
   const merged = await client.command({ type: "get_last_assistant_text" });
   assert.ok(merged.success && merged.command === "get_last_assistant_text");
   assert.equal(merged.data.text, "real Worker reply", JSON.stringify(client.events));
+  t.diagnostic("starting cancellable real Pi task");
+  await client.command({ type: "prompt", message: "/cloud-submit wait until explicitly stopped" });
+  t.diagnostic("cancellable submission returned");
+  await until(() => client.events.some(event => event.type === "extension_ui_request" && event.method === "setWidget" && event.widgetLines?.some(line => line.includes("WAITING_FOR_ABORT"))), "running cloud text was not streamed before completion");
+  const cancelling = (await records()).find(item => item.task.taskId !== record.task.taskId)!;
+  assert.ok(cancelling, "second explicit submission must exist");
+  t.diagnostic("stream received; requesting real process stop");
+  await client.command({ type: "prompt", message: "/cloud-abort" });
+  t.diagnostic("stop command returned");
+  await until(async () => (await records()).some(item => item.task.taskId === cancelling.task.taskId && item.status === "aborted" && !item.finalizing), "real Pi did not stop and finish runtime cleanup");
+  await assert.rejects(() => readFile(join(workerDir, "tasks", cancelling.task.taskId, "runtime", "agent", "models.json")), { code: "ENOENT" });
+  await until(async () => {
+    const saved = (await loadClientState(join(agentDir, "pi-cloud.json"))).tasks?.find(item => item.taskId === cancelling.task.taskId);
+    return saved?.status === "aborted" && saved.finalizing === false;
+  }, "abort acknowledgement and event tail did not release the client");
+  t.diagnostic("remote stopped and credentials removed; checking local conversation");
+  await client.command({ type: "prompt", message: "continue locally after cancelling cloud" });
+  await until(() => client.events.some(event => event.type === "message_end" && JSON.stringify(event).includes("LOCAL_REPLY_AFTER_CANCEL")), () => Promise.resolve(JSON.stringify({ message: "cloud cancellation broke normal local conversation", events: client.events.slice(-15), stderr: client.stderr })) );
+  assert.equal((await records()).length, 2, "local continuation must not submit another cloud task");
   assert.ok(!JSON.stringify(client.events).includes("CLOUD_TEST_KEY"), "credentials must never be rendered or logged by the client");
 });

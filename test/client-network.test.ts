@@ -9,6 +9,7 @@ import test from "node:test";
 
 import {
   CloudConnection,
+  CloudRequestError,
   normalizeFingerprint,
 } from "../src/client-network.js";
 import { createPairing } from "../src/worker/pairing.js";
@@ -115,7 +116,14 @@ test("a stalled HTTP response cannot trigger the completed TLS handshake timeout
     return original.call(this, ms === 30_000 ? 100 : ms, callback);
   });
   const connection = new CloudConnection(`https://127.0.0.1:${address.port}`, tls.fingerprint, "fixture-token");
-  await assert.rejects(() => connection.download("stalled"), /^Error: HTTP_RESPONSE_TIMEOUT$/);
+  await assert.rejects(() => connection.download("stalled"), (error: unknown) => {
+    assert.ok(error instanceof CloudRequestError);
+    assert.equal(error.code, "HTTP_RESPONSE_TIMEOUT");
+    assert.equal(error.progress.phase, "response");
+    assert.equal(error.progress.operation, "artifact_download");
+    assert.equal(error.progress.receivedBytes, 0);
+    return true;
+  });
   assert.equal(requests, 1, "the request reached HTTP only after the pin was verified");
 });
 

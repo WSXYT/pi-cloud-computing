@@ -86,6 +86,19 @@ function parseSecretMetadata(value: unknown): SecretMetadata {
   return metadata as unknown as SecretMetadata;
 }
 
+export interface TransferProgress {
+  phase: "connect" | "upload" | "response" | "download";
+  operation: "artifact_probe" | "artifact_upload" | "artifact_download" | "credential_upload" | "credentials" | "worker_info" | "connection";
+  totalBytes: number;
+  sentBytes: number;
+  receivedBytes: number;
+  elapsedMs: number;
+}
+
+export class CloudRequestError extends Error {
+  constructor(readonly code: string, readonly progress: TransferProgress, readonly serverCause?: string) { super(code); }
+}
+
 export class CloudConnection {
   private readonly agent: Agent;
 
@@ -164,6 +177,7 @@ export class CloudConnection {
     data: Uint8Array,
     contentType: string,
     signal?: AbortSignal,
+    onProgress?: (progress: TransferProgress) => void,
   ): Promise<void> {
     await this.request(`/artifacts/${encodeURIComponent(id)}`, {
       method: "POST",
@@ -171,6 +185,7 @@ export class CloudConnection {
       contentType,
       authenticated: true,
       signal,
+      onProgress,
     });
   }
 
@@ -266,6 +281,7 @@ export class CloudConnection {
       authenticated?: boolean;
       headers?: Record<string, string>;
       signal?: AbortSignal | undefined;
+      onProgress?: ((progress: TransferProgress) => void) | undefined;
     },
   ): Promise<Buffer> {
     const url = new URL(path, this.baseUrl);
@@ -284,35 +300,62 @@ export class CloudConnection {
       agent: this.agent,
       headers,
     };
+    const started = Date.now();
+    const data = options.body === undefined ? undefined : Buffer.from(options.body);
+    let operation: TransferProgress["operation"] = "connection";
+    if (path.startsWith("/artifacts/")) {
+      operation = "artifact_download";
+      if (options.method === "HEAD") operation = "artifact_probe";
+      if (options.method === "POST") operation = "artifact_upload";
+    } else if (path.startsWith("/secrets")) operation = options.method === "POST" ? "credential_upload" : "credentials";
+    else if (path === "/worker/manifest") operation = "worker_info";
+    const progress: TransferProgress = { phase: "connect", operation, totalBytes: data?.length ?? 0, sentBytes: 0, receivedBytes: 0, elapsedMs: 0 };
+    const snapshot = (): TransferProgress => ({ ...progress, elapsedMs: Date.now() - started });
+    const report = () => options.onProgress?.(snapshot());
     return new Promise((resolve, reject) => {
+      let settled = false;
       let onAbort: (() => void) | undefined;
+      let connectTimer: ReturnType<typeof setTimeout> | undefined;
       const cleanup = () => {
+        clearTimeout(connectTimer);
         if (onAbort) options.signal?.removeEventListener("abort", onAbort);
       };
-      const fail = (error: Error) => { cleanup(); reject(error); };
+      const fail = (error: Error) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        const code = /^[A-Z][A-Z0-9_]{0,63}$/.test(error.message) ? error.message : (error as NodeJS.ErrnoException).code ?? "NETWORK_ERROR";
+        reject(error instanceof CloudRequestError ? error : new CloudRequestError(/^[A-Z][A-Z0-9_]{0,63}$/.test(code) ? code : "NETWORK_ERROR", snapshot()));
+      };
       const req = request(requestOptions, (response) => {
         const chunks: Buffer[] = [];
-        let size = 0;
         response.on("error", fail);
-        response.on("aborted", () => fail(new Error("Response interrupted")));
+        response.on("aborted", () => fail(new Error("RESPONSE_INTERRUPTED")));
         response.on("data", (chunk: Buffer) => {
-          size += chunk.length;
-          if (size > 50 * 1024 * 1024) {
-            response.destroy(new Error("Response exceeds artifact size limit"));
+          progress.phase = options.method === "GET" ? "download" : "response";
+          progress.receivedBytes += chunk.length;
+          if (progress.receivedBytes > 50 * 1024 * 1024) {
+            response.destroy(new Error("RESPONSE_TOO_LARGE"));
             return;
           }
           chunks.push(Buffer.from(chunk));
+          report();
         });
         response.on("end", () => {
+          if (settled) return;
           const body = Buffer.concat(chunks);
           if ((response.statusCode ?? 500) >= 400) {
-            let message = `HTTP_${response.statusCode}`;
+            let code = `HTTP_${response.statusCode}`;
+            let serverCause: string | undefined;
             try {
-              const value = JSON.parse(body.toString("utf8")) as { error?: unknown };
-              if (typeof value.error === "string") message = value.error;
-            } catch { /* Don't echo an unstructured proxy page or server body into Pi. */ }
-            fail(new Error(message));
+              const value = JSON.parse(body.toString("utf8")) as { error?: unknown; params?: { cause?: unknown } };
+              if (typeof value.error === "string" && /^[A-Z][A-Z0-9_]{0,63}$/.test(value.error)) code = value.error;
+              if (typeof value.params?.cause === "string" && /^[A-Z_]{1,32}$/.test(value.params.cause)) serverCause = value.params.cause;
+            } catch { /* Never echo raw proxy/HTTP exceptions. */ }
+            fail(new CloudRequestError(code, snapshot(), serverCause));
+            req.destroy();
           } else {
+            settled = true;
             cleanup();
             resolve(body);
           }
@@ -320,10 +363,29 @@ export class CloudConnection {
       });
       onAbort = () => req.destroy(new Error("CLOUD_CANCELLED"));
       req.on("error", fail);
-      if (options.signal) options.signal.addEventListener("abort", onAbort, { once: true });
+      req.once("socket", () => {
+        clearTimeout(connectTimer);
+        progress.phase = data?.length ? "upload" : "response";
+        report();
+      });
+      req.once("finish", () => { progress.phase = "response"; report(); });
+      connectTimer = setTimeout(() => req.destroy(new Error("CONNECTION_TIMEOUT")), 15_000);
+      connectTimer.unref();
+      if (options.signal) {
+        options.signal.addEventListener("abort", onAbort, { once: true });
+        if (options.signal.aborted) onAbort();
+      }
       req.setTimeout(30_000, () => req.destroy(new Error("HTTP_RESPONSE_TIMEOUT")));
-      if (options.body !== undefined) req.write(options.body);
-      req.end();
+      void (async () => {
+        // Bound queued bytes; callbacks describe local socket progress, not remote acknowledgement.
+        for (let offset = 0; data && offset < data.length && !settled; offset += 64 * 1024) {
+          const chunk = data.subarray(offset, offset + 64 * 1024);
+          await new Promise<void>((done, rejectWrite) => req.write(chunk, (error) => error ? rejectWrite(error) : done()));
+          progress.sentBytes += chunk.length;
+          report();
+        }
+        if (!settled) req.end();
+      })().catch(fail);
     });
   }
 }

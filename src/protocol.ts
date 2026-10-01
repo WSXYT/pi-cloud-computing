@@ -18,6 +18,8 @@ export type InputDelivery = "prompt" | "steer" | "followUp";
 export type ErrorCode =
   | "PROTOCOL_VERSION_UNSUPPORTED"
   | "INVALID_FRAME"
+  | "WORKER_STORAGE_ERROR"
+  | "RUNNER_UNAVAILABLE"
   | "AUTH_REQUIRED"
   | "AUTH_REJECTED"
   | "PAIRING_CODE_INVALID"
@@ -41,6 +43,9 @@ export interface ProtocolError {
 }
 
 export interface WorkerCapabilities {
+  cloudVersion?: string;
+  storageHealthy?: boolean;
+  storageError?: string;
   piVersion: string;
   nodeVersion: string;
   gitVersion: string;
@@ -259,6 +264,9 @@ export function parseWorkerIdentity(value: unknown): WorkerIdentity {
   if (!Array.isArray(capabilities.runners) || !capabilities.runners.length || capabilities.runners.some((runner) => runner !== "host" && runner !== "docker")) throw new Error("invalid Worker runners");
   if (!requireCounter(capabilities.maxArtifactBytes, "maxArtifactBytes") || typeof capabilities.dockerAvailable !== "boolean") throw new Error("invalid Worker capabilities");
   if (capabilities.dockerNetwork !== undefined && capabilities.dockerNetwork !== "none" && capabilities.dockerNetwork !== "bridge") throw new Error("invalid Docker network");
+  if (capabilities.cloudVersion !== undefined) requireString(capabilities.cloudVersion, "cloudVersion");
+  if (capabilities.storageHealthy !== undefined && typeof capabilities.storageHealthy !== "boolean") throw new Error("invalid Worker storage health");
+  if (capabilities.storageError !== undefined && (typeof capabilities.storageError !== "string" || !/^[A-Z_]{1,32}$/.test(capabilities.storageError))) throw new Error("invalid Worker storage diagnosis");
   // SAFETY: all identity fields consumed by the client have been validated; archive versions are negotiated separately.
   return worker as unknown as WorkerIdentity;
 }

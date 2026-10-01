@@ -3,6 +3,7 @@ import { Key, matchesKey, truncateToWidth, visibleWidth, type EditorTheme, type 
 
 export interface CloudEditorState {
   locked: boolean;
+  busy?: boolean;
   append: boolean;
   status: string | undefined;
 }
@@ -16,6 +17,7 @@ export class CloudEditor extends CustomEditor {
     private readonly accent: (text: string) => string,
     private readonly cancelAppend: () => void,
     private readonly submitLiteral: (text: string) => void,
+    private readonly requestStop: () => void = () => {},
   ) {
     super(tui, theme, keybindings);
   }
@@ -24,6 +26,10 @@ export class CloudEditor extends CustomEditor {
     const state = this.getCloudState();
     if (state.append && matchesKey(data, Key.escape)) {
       this.cancelAppend();
+      return;
+    }
+    if ((state.busy ?? state.locked) && (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl("c")))) {
+      this.requestStop();
       return;
     }
     if (state.append && matchesKey(data, Key.enter) && /^[\/!]/.test(this.getExpandedText().trimStart())) {

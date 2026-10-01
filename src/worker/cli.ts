@@ -203,7 +203,7 @@ export async function runWorkerCli(args: string[], stdout = console.log): Promis
   }
   if (command === "health") { await health(config); stdout("health=ok"); return 0; }
   if (command === "serve") {
-    const piVersionCommand = process.platform === "win32"
+    const piVersionCommand = config.runner === "host"
       ? execFileAsync(process.execPath, [fileURLToPath(new URL("./bundle/cli.js", import.meta.resolve("@earendil-works/pi-coding-agent"))), "--version"])
       : execFileAsync("pi", ["--version"]);
     const [{ stdout: piVersion }, { stdout: gitVersion }] = await Promise.all([piVersionCommand, execFileAsync("git", ["--version"])]);

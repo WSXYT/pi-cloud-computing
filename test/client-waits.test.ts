@@ -27,7 +27,7 @@ for (const scenario of ["reconnect", "stop"] as const) {
       sessionManager: { getSessionId: () => "session", getEntries: () => [] },
       ui: { setStatus() {}, setWidget() {}, setEditorText() {}, notify: (text: string) => notifications.push(text) },
     } as unknown as ExtensionCommandContext;
-    const fake = { registerEntryRenderer() {}, appendEntry() {},
+    const fake = { registerEntryRenderer() {}, registerMessageRenderer() {}, sendMessage() {}, appendEntry() {},
       on(name: string, handler: Function) { handlers[name] = handler; },
       registerCommand(name: string, options: { handler: Function }) { handlers[name] = options.handler; },
     } as unknown as ExtensionAPI;

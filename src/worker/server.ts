@@ -11,10 +11,10 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
 import { buildEnvironmentManifest } from "../environment.js";
-import { PiCloudError } from "../errors.js";
+import { PiCloudError, workerStorageError } from "../errors.js";
 import { validateIdentifier } from "../paths.js";
 import { type WorkerIdentity } from "../protocol.js";
-import { PROTOCOL_VERSION } from "../version.js";
+import { CLOUD_VERSION, PROTOCOL_VERSION } from "../version.js";
 import { authenticateToken, completePairing } from "./pairing.js";
 import { ArtifactStore, MAX_ARTIFACT_BYTES } from "./artifacts.js";
 import { SecretStore } from "./secrets.js";
@@ -156,8 +156,8 @@ async function startWorkerServerOwned(
     try {
       const url = new URL(request.url ?? "/", "https://worker.invalid");
       if (request.method === "GET" && url.pathname === "/health")
-        return json(response, 200, {
-          ok: true,
+        return json(response, persistenceError ? 503 : 200, {
+          ok: !persistenceError,
           protocolVersion: PROTOCOL_VERSION,
         });
       if (request.method === "POST" && url.pathname === "/pair") {
@@ -187,7 +187,7 @@ async function startWorkerServerOwned(
       if (request.method === "GET" && url.pathname === "/worker/manifest")
         return json(response, 200, {
           manifest,
-          worker: identity,
+          worker: { ...identity, capabilities: { ...identity.capabilities, storageHealthy: !persistenceError, ...(persistenceError ? { storageError: workerStorageError(persistenceError).params.cause } : {}) } },
           certificateFingerprint: tls.fingerprint,
         });
       if (request.method === "DELETE" && url.pathname === "/tokens/current") {
@@ -199,6 +199,7 @@ async function startWorkerServerOwned(
       }
       if (request.method === "GET" && url.pathname === "/secrets")
         return json(response, 200, await secrets.list(true));
+      if (persistenceError && request.method === "POST" && /^\/(artifacts|secrets)\//.test(url.pathname)) throw workerStorageError(persistenceError);
       if (request.method === "POST" && url.pathname.startsWith("/secrets/")) {
         const id = decodeURIComponent(url.pathname.slice("/secrets/".length));
         if (!/^[A-Za-z0-9._-]+$/.test(id))
@@ -257,7 +258,11 @@ async function startWorkerServerOwned(
     } catch (error) {
       if (response.destroyed) return;
       if (error instanceof HttpError) return json(response, error.status, { error: error.code });
-      if (error instanceof PiCloudError) return json(response, 403, { error: error.code });
+      if (error instanceof PiCloudError) return json(response, error.code === "WORKER_STORAGE_ERROR" ? 503 : 403, { error: error.code, ...(Object.keys(error.params).length ? { params: error.params } : {}) });
+      if (["ENOSPC", "EDQUOT", "EACCES", "EPERM", "EROFS", "EIO", "EMFILE", "ENFILE"].includes(String((error as NodeJS.ErrnoException).code))) {
+        const safe = workerStorageError(error, "artifact_or_credential_io");
+        return json(response, 503, { error: safe.code, params: safe.params });
+      }
       if (error instanceof SyntaxError || error instanceof URIError) return json(response, 400, { error: "INVALID_FRAME" });
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return json(response, 404, { error: "NOT_FOUND" });
       // Never echo filesystem paths, parser input, credentials or provider error bodies.
@@ -265,13 +270,17 @@ async function startWorkerServerOwned(
     }
   });
   server.headersTimeout = 10_000;
-  server.requestTimeout = 30_000;
+  // Allow slow, progressing uploads; bound inactivity separately from total time.
+  server.requestTimeout = 10 * 60_000;
+  server.setTimeout(30_000);
   server.maxConnections = 256;
   const identity: WorkerIdentity = {
     workerId: state.workerId,
     address: `https://${addressHost}:${options.port ?? config.port}`,
     certificateFingerprint: state.certificateFingerprint ?? tls.fingerprint,
     capabilities: {
+      cloudVersion: CLOUD_VERSION,
+      storageHealthy: true,
       piVersion: options.piVersion,
       nodeVersion: options.nodeVersion,
       gitVersion: options.gitVersion,
@@ -310,8 +319,10 @@ async function startWorkerServerOwned(
     void persistence.catch(() => undefined); // flush() surfaces failure to all transport acknowledgements.
   };
   const flush = async (): Promise<void> => {
-    while (persistence) await persistence;
-    if (persistenceError) throw persistenceError;
+    try {
+      while (persistence) await persistence;
+      if (persistenceError) throw persistenceError;
+    } catch (error) { throw workerStorageError(error); }
   };
   const tasks = new WorkerTaskManager(schedulePersistence);
   tasks.restore(persistedTasks);
@@ -437,12 +448,14 @@ async function startWorkerServerOwned(
       await taskSocket.close();
       await Promise.all(preparations);
       await executor?.dispose();
-      await flush();
-      server.closeIdleConnections();
-      server.closeAllConnections();
-      await new Promise<void>((resolve, reject) =>
-        server.close((error) => (error ? reject(error) : resolve())),
-      );
+      try { await flush(); }
+      finally {
+        server.closeIdleConnections();
+        server.closeAllConnections();
+        await new Promise<void>((resolve, reject) =>
+          server.close((error) => (error ? reject(error) : resolve())),
+        );
+      }
     },
   };
 }

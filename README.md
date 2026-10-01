@@ -47,6 +47,10 @@ try {
 
 > `main` 链接安装主分支。开发/验收分支不等于已发布版本；生产更新前核对 [ACCEPTANCE.md](ACCEPTANCE.md) 和对应 commit 的 CI。
 
+### 0.2.1 的服务端兼容要求
+
+只更新本地插件**不会更新服务器**。本版在上传前检查 Worker 版本和任务存储健康状态；旧 Worker 必须先升级到 0.2.1 或更高版本。先检查原任务、保留数据，再安排服务升级/重启，用 `/cloud-status` 核对两端版本。原生 Worker 使用其安装包解析到的 Pi，避免误用 PATH 中的旧版本。升级不代表重跑原任务。
+
 ### 日常使用
 
 在输入区写下任务：
@@ -55,11 +59,14 @@ try {
 |---|---|
 | 空闲时 **Enter** | 正常交给本地 Pi |
 | 空闲时 **F6** | 将当前输入作为云端任务，打开上传范围与授权确认 |
-| 准备/上传时 **F6** | 取消实际请求，恢复原输入 |
+| 准备/上传时 **Esc / Ctrl+C / F6** | 取消实际请求，恢复原输入 |
 | 云端运行时 | 输入区显示进度并默认锁定，不会把普通输入偷偷发给云端 |
+| 运行时 **Esc / Ctrl+C** | 请求云端停止；停止未确认时再按 Esc 可只结束本地等待 |
 | 运行时 **F6 → 追加指令** | 明确进入追加模式；Enter 只发送给当前云端任务 |
 | 追加时 **Esc** | 返回进度，保留未发送的草稿 |
 | 完成/失败后 | 释放输入区；普通 Enter 可继续本地，不必先处理结果 |
+
+云端文字增量显示在原生进度区；完整回复、工具结果和错误进入可见对话记录，不自动触发本地模型。停止确认和尾部事件接收完成后释放输入区。
 
 追加模式中的 `/cloud-abort ...`、其他 `/...` 或 `!...` **按文字发送**，不会被误当成本地管理命令。F6 菜单也提供返回本地、停止、重连。远程工具需要确认时会显示原生 Pi 对话框。
 
@@ -72,7 +79,7 @@ try {
 - **Git 工作区**：必需；Git 历史、已跟踪文件改动和选中的非忽略新文件。
 - **Pi 运行环境**：插件、本地包、skills、prompts、themes 与已脱敏 Provider 配置。
 - **当前对话**：可取消，改为新建云端会话。
-- **Pi Provider 凭据**：检测到时显示，**默认不选**，必须明确授权。
+- **Pi Provider 凭据**：检测到时显示，**默认不选**，必须明确授权。Worker 不继承宿主机或本机的登录、环境密钥；已加密缓存的凭据也必须按任务授权。不选时需另外明确确认“所选模型端点无需鉴权”，否则返回清单选择凭据或取消。普通付费/登录模型通常不能无凭据运行。
 
 清单和“下一步”不会上传。最后确认才会传输；拒绝返回清单，退出保留草稿。每个任务使用独立副本，不要求手动在服务器克隆项目。
 
@@ -80,11 +87,15 @@ try {
 
 ### 断线、取消与重试
 
-- **上传取消**：`/cloud-cancel` 或上传中的 F6；中断网络请求，恢复草稿。
+- **上传取消**：Esc、Ctrl+C、`/cloud-cancel` 或上传中的 F6；中断网络请求，恢复草稿。
 - **连接中断**：最多自动重连 5 次，单次等待不超过 10 秒，完整本地等待不超过 90 秒；随后释放输入。`/cloud-reconnect` 查询并恢复**原任务**。
 - **停止未确认**：`/cloud-abort` 请求远端停止；30 秒无确认便释放本地输入，**不会谎报任务已停止**。稍后重连查询。
 - **结果下载无进展**：30 秒结束等待，可再次获取。
 - **任务失败**：`/cloud-retry` 在原 Worker 创建**新任务**，保留旧记录，重新确认同步范围和凭据。它不是恢复执行点，之前的外部操作可能重复。
+
+传输失败会标明制品、阶段（连接/上传/等待响应/下载）、发送字节数、接收字节数和错误码；本机发送完不代表服务端确认。上传采用分块背压，仍以 30 秒无活动为网络等待上限，服务端另有 10 分钟总请求上限。`WORKER_STORAGE_ERROR` 会提示检查空间、inode 和权限，不再伪装成 `INVALID_FRAME`。
+
+即使 Worker 回答“找不到原任务”，也**不会自动创建任务**；状态丢失和未收到提交无法仅凭这个回答区分，须明确确认重新执行，避免重复外部操作。
 
 这些超时只结束本地等待，不决定服务器任务结果。历史任务、错误详情和恢复入口保留在 `/cloud`，不长期占用标题。
 
@@ -147,11 +158,14 @@ Unverified/dirty source checkouts do not emit installer links; use a verified in
 
 - **Enter** stays local while idle. **F6** submits the editor draft to cloud preflight.
 - Review the Git workspace, runtime resources, conversation and optional credentials. Credentials are **off by default**. Only the final consent uploads anything.
-- During preparation/upload, **F6 cancels the request and restores the draft**.
+- During preparation/upload, **Esc, Ctrl+C or F6 cancels the request and restores the draft**.
+- During execution, **Esc/Ctrl+C requests a real remote stop**. While it remains unconfirmed, a second Esc only ends local waiting. Streaming text appears in the native progress area; final replies/tool results/errors appear in the visible transcript without starting a local model turn.
 - During execution the input area shows progress and is locked by default. **F6 → Append instruction** explicitly enables remote input; Enter sends it, Esc preserves the draft and returns to progress.
 - Slash-prefixed and bang-prefixed instructions in append mode are sent **literally**, not interpreted as local commands. Remote authorization uses native Pi dialogs.
 - Completion/failure releases the editor; you may continue locally before receiving results.
 - Choose an unused F6–F12 through **`/cloud → More → Cloud shortcut`**. Check conflicts in `/hotkeys` first; saving reloads extensions and updates the actual registered shortcut. Choose `disabled` to use `/cloud` instead; ordinary text is still protected by the input hook.
+
+The Worker never inherits server/client logins or environment keys. Cached credentials still require authorization for each task. Leaving credentials unchecked requires a separate explicit declaration that the selected model endpoint needs no authentication; otherwise return to the checklist or cancel. Ordinary paid/login-based models generally cannot run without credentials.
 
 Uploads contain an independent task copy. Runtime synchronization includes plugins/packages, skills, prompts, themes and redacted provider configuration. Git history can still contain committed secrets even when credential sharing is disabled. Explicitly authorized credentials are TLS-pinned, encrypted at rest, temporarily materialized for execution and cleaned up afterward; revoke them through `/cloud`.
 
@@ -159,11 +173,15 @@ Uploads contain an independent task copy. Runtime synchronization includes plugi
 
 Automatic reconnect is limited to **five retries**, **10 seconds per attempt**, **under 90 seconds total local waiting**. `/cloud-reconnect` resumes the original task. `/cloud-abort` releases local waiting after **30 seconds without confirmation**, without claiming the remote task stopped. Result retrieval times out after **30 seconds without progress**. History and error details remain available without monopolizing the title.
 
+Transfer failures identify the artifact, phase (connection/upload/response/download), local bytes sent/received and error code. Local send progress is not a remote acknowledgement. Uploads respect backpressure, retain a 30-second inactivity limit and have a separate 10-minute server request ceiling. Storage errors identify a safe cause such as `ENOSPC`, rather than being reported as invalid frames. A missing task on reconnect is **never automatically recreated**; lost state cannot prove that external effects never happened.
+
 `/cloud-retry` creates a **new task on the original Worker**, preserves the failed record and requests fresh consent; external effects may repeat. `/cloud-cancel` cancels preparation/upload rather than merely hiding its UI.
 
 Completed results are automatically validated and cached locally, without applying files or switching sessions; validated cached results remain usable offline. A cache failure offers refetch, not task re-execution. Choose **View and receive remote results** in `/cloud`, or run `/cloud-receive`. The actual file diff is shown before one confirmation applies baseline-checked files and merges the native session. Local conversation added since submission is retained. Originals, review patches, submitted-session copies and result artifacts remain available. Repeating after partial success handles only unfinished phases. Local file changes prevent overwrite. `/cloud-apply` and `/cloud-merge` remain compatibility commands; receipt can be deferred while you work locally.
 
 ### Operations and security
+
+**Updating the local plugin does not update the server.** This client requires Worker 0.2.1+ diagnostics and checks storage health before uploads. Inspect original tasks, preserve data, then schedule the server upgrade/restart. `/cloud-status` shows both versions. Native Workers resolve Pi from their own installation, not an older global Pi on PATH. Upgrading is not permission to rerun tasks.
 
 Use `node <CLI> worker status|health|pair|start|stop|uninstall`, where `<CLI>` is `~/.pi-cloud/source/dist/src/cli.js`. Linux uses systemd (sudo for service management), macOS uses a user launchd agent loaded at login, and Windows uses a least-privilege S4U scheduled task without an interactive-login requirement. Closing the installer terminal does not stop the Worker. `worker uninstall` stops/unregisters the service while retaining source, task data, configuration, certificates and credentials; Linux requires sudo. macOS/Windows logs are in the Worker data directory's `worker.log`; Linux uses `journalctl -u pi-cloud-worker`.
 

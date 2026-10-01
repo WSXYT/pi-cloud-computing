@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+import type { TransferProgress } from "./client-network.js";
 import type { GitBaseline, Locale, SessionCursor, TaskInput, TaskSpec, TaskStatus } from "./protocol.js";
 import { withPrivateFileLock, writePrivateJson } from "./storage.js";
 
@@ -42,6 +43,8 @@ export interface CloudTaskState {
   pendingAbort?: boolean;
   pendingInputs?: TaskInput[];
   error?: string;
+  requestFailure?: TransferProgress & { code: string; artifactKind?: string; serverCause?: string };
+  outcomeUnknown?: boolean;
 }
 
 export const CLOUD_SHORTCUTS = ["f6", "f7", "f8", "f9", "f10", "f11", "f12", "disabled"] as const;

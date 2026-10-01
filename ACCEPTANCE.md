@@ -2,7 +2,21 @@
 
 A passing unit test, an installed service descriptor, or a skipped job is not platform acceptance. Require **all seven CI jobs for the exact candidate commit**: three native client/service jobs, three cross-platform artifact consumers, and Linux Docker. The current branch's [Actions runs](https://github.com/WSXYT/pi-cloud-computing/actions/workflows/ci.yml?query=branch%3Awork%2Fcloud-native-ux) identify the immutable commit and logs. Do not use an older green run to approve newer code.
 
-## Latest complete automated gate
+## 0.2.1 corrective acceptance (candidate; CI pending)
+
+Real use after 0.2.0 exposed missing phase diagnostics, an unclear credential path, ineffective Escape stop, and output hidden by the custom-editor path. Read-only triage also found an old deployed Worker (`5d62621`, Pi 0.84.2) and a nearly full disk. Neither failed submission had been acknowledged. The old client did not record the exact timed-out HTTP request; disk pressure is evidence, **not proof of the historical errno**. Earlier green CI did not cover these combinations.
+
+The corrective suite now requires:
+
+- Explicit pre-upload rejection of legacy/unhealthy Workers; retained drafts; separate no-auth confirmation when credentials are unchecked.
+- Upload cancellation and response-stall diagnostics with byte counts; structured, path-free storage failures over HTTP/WS; failed durable storage prevents new task execution.
+- Recovery errors never send `task_create`; an unknown remote outcome stays unknown, and errors remain visible without triggering local model turns.
+- Four real PTY/ConPTY flows (regular/fullscreen × completion/Escape abort), including streaming text, final transcript output, tool errors and literal slash append.
+- Each installed-service real-Pi test additionally streams indefinitely, stops the actual task, verifies runtime credential removal, and obtains a normal **local model reply after cancellation**. Docker runs the same extended test. Host Workers use the Pi entry from their own installation on all platforms.
+
+Fault-injection unit tests establish error handling, not the historical cause or platform acceptance. Exact-commit seven-job CI and package smoke remain required before approving this candidate. No production restart, upgrade or task replay was performed during read-only triage; authorized cleanup was restricted to old, reconstructible download caches.
+
+## Previous complete automated gates
 
 The finalization run on `e12676a` exposed a macOS duplicate-start race. Fix `033895810b9800948d11fd0f13760018092759b7` passed [all seven jobs in run 36807606641](https://github.com/WSXYT/pi-cloud-computing/actions/runs/36807606641). Repeated launchd start preserves the running PID, and a per-directory lifetime lease rejects duplicate Workers before task recovery can mutate live state. `worker-instance.test.ts` verifies rejection and a subsequent clean restart. This later result supersedes the failed finalization attempt; no failed run was reinterpreted as success.
 
@@ -30,8 +44,8 @@ The Windows development checkout also passed the expanded **98-test suite, zero 
 |---|---|
 | Fresh server + local installation | `ci-native-service.mjs` runs the real Worker installer, validates both commit-pinned client command forms, then runs the local installer with their pairing arguments in an isolated Pi profile. A second connection does not redeem the code or duplicate the connection. |
 | Background persistence | The installer process exits before health and real-task checks. The native service manager, not an in-process test server, owns execution. Stop removes readiness; restart retains Worker identity and paired access. Uninstall removes service registration/readiness while byte-for-byte preserving configuration, state and the master key. |
-| Real remote task | `client-native.test.ts` runs against the installed service with actual Pi, synchronized provider config/skill/tool, remote UI consent, file changes, native conversation merge and runtime credential deletion. A deterministic local model HTTP fixture avoids paid credentials; Pi, tools, filesystem and service execution are real. |
-| Enter/F6, focus, literal input | `client-terminal.test.ts` launches **real Pi interactive mode**, using Windows ConPTY or POSIX PTY. It tests default input lock, F6 menus, literal `/cloud-abort 中文 literal` bracketed paste, resize, completion/unlock, and idle F6 preflight cancellation without creating a second task. Both regular/dark and fullscreen/light variants run the same workflow. It does not replace this with RPC. |
+| Real remote task | `client-native.test.ts` runs against the installed service with actual Pi, synchronized provider config/skill/tool, remote UI consent, file changes, native conversation merge and runtime credential deletion. It also stops a second streaming task, verifies credential cleanup and confirms local model continuation. A deterministic local model HTTP fixture avoids paid credentials; Pi, tools, filesystem and service execution are real. |
+| Enter/F6, focus, literal input | `client-terminal.test.ts` launches **real Pi interactive mode**, using Windows ConPTY or POSIX PTY. It tests default input lock, F6 menus, literal `/cloud-abort 中文 literal` bracketed paste, resize, streamed/final/error output, completion or Escape abort/unlock, and idle F6 preflight cancellation without creating a second task. Both regular/dark and fullscreen/light variants run the same workflow. It does not replace this with RPC. |
 | Narrow rendering and append Escape | `client-editor.test.ts` and wizard tests verify cell widths, key routing, Escape/draft retention and theme-based components. Existing editor factories are restored on teardown. |
 | Shortcut configuration | Client tests verify default F6, persisted F9 registration after reload, and no registration when disabled. The menu asks users to inspect `/hotkeys` for conflicts; no host API exposes all other extensions' private bindings. Disabled mode uses `/cloud`; ordinary text remains protected by the input hook. |
 | Bounded disconnected/stop waiting | Fake-clock tests in `client-waits.test.ts` exercise five retries and a 30-second unconfirmed stop, release local input, and verify the task stays `running`, not falsely completed/aborted. Network tests separately exercise actual pinned TLS/WSS. |

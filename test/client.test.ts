@@ -112,7 +112,7 @@ test("restores a missed terminal event on session start", async () => {
       | undefined;
     const fake = {
       registerCommand() {},
-      registerEntryRenderer() {},
+      registerEntryRenderer() {}, registerMessageRenderer() {}, sendMessage() {},
       on(name: string, handler: typeof sessionStart) {
         if (name === "session_start") sessionStart = handler;
       },
@@ -171,7 +171,7 @@ test("retry uses the failed task's Worker without switching the default or losin
   const notifications: string[] = [];
   const fake = {
     registerCommand(name: string, options: { handler: (args: string, ctx: ExtensionCommandContext) => Promise<void> }) { commands.set(name, options.handler); },
-    registerEntryRenderer() {},
+    registerEntryRenderer() {}, registerMessageRenderer() {}, sendMessage() {},
     on(name: string, handler: typeof start) { if (name === "session_start") start = handler; },
   } as unknown as ExtensionAPI;
   const ctx = {
@@ -204,14 +204,17 @@ test("retry uses the failed task's Worker without switching the default or losin
 });
 
 test("releases a task after connection rejection and lets local input continue", async (t) => {
+  let shutdown = async () => {};
+  let sessionShutdown: ((event: unknown, ctx: ExtensionContext) => Promise<void>) | undefined;
   const root = await mkdtemp(join(tmpdir(), "pi-cloud-disconnect-"));
   const statePath = join(root, "state.json");
   const previous = process.env.PI_CLOUD_CLIENT_STATE;
   process.env.PI_CLOUD_CLIENT_STATE = statePath;
   t.after(async () => {
+    await shutdown();
     if (previous === undefined) delete process.env.PI_CLOUD_CLIENT_STATE;
     else process.env.PI_CLOUD_CLIENT_STATE = previous;
-    await rm(root, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
   });
   const task: CloudTaskState = {
     taskId: "running-task", workerId: "worker", baseUrl: "https://worker.invalid", fingerprint: "aa".repeat(32),
@@ -222,10 +225,11 @@ test("releases a task after connection rejection and lets local input continue",
   let inputHandler: ((event: { text: string }, ctx: ExtensionContext) => Promise<{ action: string }>) | undefined;
   let sessionStart: ((event: unknown, ctx: ExtensionContext) => Promise<void>) | undefined;
   const fake = {
-    registerCommand() {}, registerEntryRenderer() {},
+    registerCommand() {}, registerEntryRenderer() {}, registerMessageRenderer() {}, sendMessage() {},
     on(name: string, handler: unknown) {
       if (name === "input") inputHandler = handler as typeof inputHandler;
       if (name === "session_start") sessionStart = handler as typeof sessionStart;
+      if (name === "session_shutdown") sessionShutdown = handler as typeof sessionShutdown;
     },
   } as unknown as ExtensionAPI;
   const notifications: string[] = [];
@@ -233,6 +237,7 @@ test("releases a task after connection rejection and lets local input continue",
   t.mock.method(CloudConnection.prototype, "openEvents", async () => { throw new Error("CERTIFICATE_MISMATCH"); });
   await extension(fake);
   const ctx = { cwd: root, hasUI: false, isIdle: () => true, hasPendingMessages: () => false, sessionManager: { getSessionId: () => "session", getEntries: () => [] }, ui } as unknown as ExtensionContext;
+  shutdown = async () => { await sessionShutdown?.({}, ctx); };
   await sessionStart?.({}, ctx);
   const result = await inputHandler?.({ text: "local after disconnect" }, ctx);
   assert.deepEqual(result, { action: "continue" });
@@ -243,7 +248,7 @@ test("releases a task after connection rejection and lets local input continue",
 test("completed cloud results do not block an ordinary local input", async () => {
   const inputHandlers: Array<(event: { text: string }, ctx: ExtensionContext) => Promise<{ action: string }>> = [];
   const fake = {
-    registerCommand() {}, registerEntryRenderer() {},
+    registerCommand() {}, registerEntryRenderer() {}, registerMessageRenderer() {}, sendMessage() {},
     on(name: string, handler: (event: { text: string }, ctx: ExtensionContext) => Promise<{ action: string }>) { if (name === "input") inputHandlers.push(handler); },
   } as unknown as ExtensionAPI;
   await extension(fake);
@@ -262,7 +267,7 @@ test("registers F6 as the cloud submit shortcut", async () => {
   let editor = "run this in the cloud";
   let sent: string | undefined;
   const fake = {
-    registerCommand() {}, registerEntryRenderer() {}, on() {},
+    registerCommand() {}, registerEntryRenderer() {}, registerMessageRenderer() {}, sendMessage() {}, on() {},
     registerShortcut(key: string, options: { handler: (ctx: ExtensionContext) => Promise<void> }) { shortcut = key; shortcutHandler = options.handler; },
     sendUserMessage(message: string) { sent = message; },
   } as unknown as ExtensionAPI;
@@ -303,7 +308,7 @@ test("registers the cloud command surface", async () => {
       commands.push(name);
     },
     on() {},
-    registerEntryRenderer() {},
+    registerEntryRenderer() {}, registerMessageRenderer() {}, sendMessage() {},
   } as unknown as ExtensionAPI;
   await extension(fake);
   assert.deepEqual(commands, [
