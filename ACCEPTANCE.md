@@ -4,7 +4,7 @@ A passing unit test, an installed service descriptor, or a skipped job is not pl
 
 ## Latest complete automated gate
 
-Commit `eaeeda5` passed [CI run 36757075509](https://github.com/WSXYT/pi-cloud-computing/actions/runs/36757075509); that run records its full immutable `headSha`. All **seven** jobs passed: Windows 100/100 tests, Linux/macOS 99/99, zero skips, both installers, real installed-service tasks, data-preserving uninstall, all nine artifact combinations and validated result caching/receipt. Subsequent changes still require their own complete CI run.
+Commit `994ecd12ec92f18778e560294a288f7f8ba54641` passed [CI run 36762715581](https://github.com/WSXYT/pi-cloud-computing/actions/runs/36762715581). All **seven** jobs passed: Windows 101/101 tests, Linux/macOS 100/100, zero skips, both terminal modes, both installers, real installed-service tasks, data-preserving uninstall, all nine artifact combinations and validated result caching/receipt. Subsequent commits, including documentation finalization, still require their own complete CI run.
 
 ## Recorded environments
 
@@ -15,6 +15,8 @@ The native-service baseline at commit `abae051daa17b49146699b61b6d64ed17f49264e`
 | windows-latest | Windows 10.0.26100 | 24.21.0 | 0.85.1 | Task Scheduler, S4U, least privilege |
 | macos-latest | Darwin 25.6.0 | 24.20.0 | 0.85.1 | User launchd agent |
 | ubuntu-latest | Linux 6.17.0-1022-azure | 24.21.0 | 0.85.1 | systemd |
+
+The expanded run `36762715581` recorded Linux x64 / AMD EPYC 9V74, Windows x64 / AMD EPYC 7763, and macOS arm64 / Apple M1 (Virtual), with the OS kernels and Node versions above.
 
 Runner images, architecture and tool versions can change; consult the candidate's **Set up job** and native-service log instead of treating `*-latest` as a permanent OS version. These results do not certify every Windows/macOS/Linux release.
 
@@ -38,6 +40,12 @@ The Windows development checkout also passed the expanded **98-test suite, zero 
 | Task process cleanup | Real process-tree runner test verifies descendants no longer hold inherited handles; RPC tests reject abnormal exit after settlement and test abort. |
 | Cross-OS artifacts | Each native job produces real Git bundles/results and native session archives. Three consumer jobs each validate all three producers: **nine source/destination combinations**, Unicode filenames, binary bytes, baseline-guarded apply and native session tails. Only a disposable fixture's absolute repository identity is rebound, after content baselines and source hashes validate; production guards are unchanged. |
 | Packaging/Docker | `pack:smoke` installs a real tarball, CLI/assets and extension in an isolated Pi profile. Linux separately builds both production images, runs real Pi via Docker, and checks non-root installation/service lifecycle. |
+
+## Approved on-site exclusions / 已确认的现场排除
+
+The user declined to provide an on-site environment and explicitly allowed checks that cannot reliably be performed to remain unverified. Accordingly, graphical IME candidate/composition windows, physical reboot recovery, and live cross-OS site/WAN connectivity are **not acceptance blockers for this delivery**. They remain **unverified**, not passed. This does not waive any native-platform, security, package or seven-job CI gate.
+
+用户确认不提供现场环境，实在无法验收可以不验收。上述三项据此不阻断本次交付；不得用字节注入冒充图形输入法、用进程重启冒充机器重启、用制品互换冒充现场网络验证。
 
 ## Scope limits — do not overclaim
 
