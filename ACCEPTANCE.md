@@ -1,8 +1,12 @@
 # Native cloud workflow acceptance / 验收记录
 
-A passing unit test, an installed service descriptor, or a skipped job is not platform acceptance. Require **all seven CI jobs for the exact candidate commit**: three native client/service jobs, three cross-platform artifact consumers, and Linux Docker. The current branch's [Actions runs](https://github.com/WSXYT/pi-cloud-computing/actions/workflows/ci.yml?query=branch%3Awork%2Fcloud-native-ux) identify the immutable commit and logs. Do not use an older green run to approve newer code.
+A passing unit test, an installed service descriptor, or a skipped job is not platform acceptance. Require **all seven CI jobs for the exact candidate commit**: three native client/service jobs, three cross-platform artifact consumers, and Linux Docker. The current branch's [Actions runs](https://github.com/WSXYT/pi-cloud-computing/actions/workflows/ci.yml?query=branch%3Afix%2Fcloud-runtime-recovery) identify the immutable commit and logs. Do not use an older green run to approve newer code.
 
-## 0.2.1 corrective acceptance (candidate; CI pending)
+## 0.2.1 corrective acceptance (verified candidate; not deployed)
+
+Commit `0928f148c03b2fa037b16894ce4e63f17b99bad0` passed [all seven jobs in run 36880585734](https://github.com/WSXYT/pi-cloud-computing/actions/runs/36880585734): Windows **115/115**, Linux/macOS **114/114**, zero test failures or skips. All three installed native services and the Docker runner passed the extended real-Pi streaming → stop → runtime credential cleanup → local conversation test. Each native job also passed package smoke, and all nine cross-platform artifact combinations passed.
+
+The first repair run (`36853475162`, commit `99f1be1`) exposed two additional defects rather than passing: journal replay lost the `finalizing` flag between journal append and snapshot replacement, and the Docker service image could not resolve its globally installed Pi through the new native entry path. The fix preserves journal finalization state (with a regression test) and links the image's pinned Pi installation into module resolution. The failed run is not counted as acceptance. Any later commit, including documentation-only changes, still requires its own seven-job pass.
 
 Real use after 0.2.0 exposed missing phase diagnostics, an unclear credential path, ineffective Escape stop, and output hidden by the custom-editor path. Read-only triage also found an old deployed Worker (`5d62621`, Pi 0.84.2) and a nearly full disk. Neither failed submission had been acknowledged. The old client did not record the exact timed-out HTTP request; disk pressure is evidence, **not proof of the historical errno**. Earlier green CI did not cover these combinations.
 
