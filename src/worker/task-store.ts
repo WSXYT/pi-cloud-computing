@@ -92,6 +92,9 @@ export async function loadTaskRecords(dataDir: string): Promise<TaskRecord[]> {
             | "failed"
             | "aborted";
           record.status = status;
+          // The journal may be ahead of tasks.json. An abort acknowledgement is
+          // not completion until the executor has removed runtime credentials.
+          record.finalizing = event.payload.finalizing === true;
           record.result = {
             ...event.payload,
             taskId: record.task.taskId,
