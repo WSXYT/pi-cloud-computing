@@ -8,12 +8,13 @@ Node.js 24 TypeScript ESM Pi extension and native Windows/macOS/Linux Worker. So
 - Install: `npm ci`
 - Validate: `npm run check && npm test`
 - Package/install smoke: `npm run pack:smoke`
+- Published-package smoke: set `PI_CLOUD_SMOKE_PACKAGE=pi-cloud-computing@<version>` for the same smoke command.
 - Production audit: `npm audit --omit=dev`
 
 ## Safety and Recovery
 - Keep protocol errors structured; verify certificate pins before credentials or uploads.
 - Credentials require explicit consent, encrypted/revocable storage and runtime cleanup.
-- Windows private writes fail closed on ACL failure; never recursively strip child-file inheritance when securing directories.
+- Windows private writes fail closed on ACL failure; never recursively strip child-file inheritance.
 - Preserve source, state, session originals and artifacts; never destructive-reset checkouts.
 - Validate cached results before saving. Preview before consent; apply only after baseline checks. Local wait timeouts never determine remote outcomes.
 - Service uninstall preserves configuration, credentials and task data.

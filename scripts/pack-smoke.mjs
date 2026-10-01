@@ -18,7 +18,9 @@ let child;
 try {
   await mkdir(cwd);
   await mkdir(agentDir);
-  const packed = await exec(process.execPath, [npm, "pack", "--json", "--pack-destination", root], { timeout: 120_000, maxBuffer: 4 * 1024 * 1024 });
+  const registryPackage = process.env.PI_CLOUD_SMOKE_PACKAGE;
+  if (registryPackage) assert.match(registryPackage, /^pi-cloud-computing@\d+\.\d+\.\d+$/);
+  const packed = await exec(process.execPath, [npm, "pack", ...(registryPackage ? [registryPackage] : []), "--json", "--pack-destination", root], { timeout: 120_000, maxBuffer: 4 * 1024 * 1024 });
   const metadataOutput = JSON.parse(packed.stdout);
   const [{ filename }] = Array.isArray(metadataOutput) ? metadataOutput : Object.values(metadataOutput);
   await writeFile(join(cwd, "package.json"), JSON.stringify({ name: "cloud-smoke-consumer", private: true }));
@@ -26,13 +28,15 @@ try {
   const installed = join(cwd, "node_modules", "pi-cloud-computing");
   const metadata = JSON.parse(await readFile(join(installed, "package.json"), "utf8"));
   assert.ok(metadata.keywords.includes("pi-package"));
+  if (registryPackage) assert.equal(`${metadata.name}@${metadata.version}`, registryPackage);
+  assert.equal((await exec(process.execPath, [join(installed, "dist/src/cli.js"), "--version"], { cwd })).stdout.trim(), metadata.version);
   for (const path of ["src/client.ts", "dist/src/cli.js", "dist/src/worker/bootstrap.js", "deploy/Dockerfile", "deploy/runner.Dockerfile", "scripts/install.sh", "scripts/install.ps1"]) await readFile(join(installed, path));
   assert.match((await exec(process.execPath, [join(installed, "dist/src/cli.js"), "--help"], { cwd })).stdout, /Usage: pi-cloud/);
   // Real Pi registration/loading in a fresh profile; no user's packages, auth, providers or sessions.
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => /^(path|pathext|systemroot|windir|comspec|temp|tmp|home|userprofile|appdata|localappdata|lang|lc_all)$/i.test(key)));
   Object.assign(env, { PI_CODING_AGENT_DIR: agentDir, PI_CLOUD_CLIENT_STATE: join(agentDir, "cloud.json"), PI_SKIP_VERSION_CHECK: "1" });
   await writeFile(join(agentDir, "settings.json"), JSON.stringify({ packages: [], disableInstallTelemetry: true, analytics: { enabled: false } }));
-  await exec(process.execPath, [pi, "install", installed], { cwd, env, timeout: 30_000 });
+  await exec(process.execPath, [pi, "install", registryPackage ? `npm:${registryPackage}` : installed], { cwd, env, timeout: 120_000 });
   child = spawn(process.execPath, [pi, "--mode", "rpc", "--no-session", "--no-skills", "--no-prompt-templates", "--no-themes"], { cwd, env, stdio: "pipe" });
   let stderr = "";
   child.stderr.setEncoding("utf8").on("data", (chunk) => { stderr += chunk; });
@@ -56,7 +60,7 @@ try {
     child.stdin.write(JSON.stringify({ id: "package-smoke", type: "get_commands" }) + "\n");
   });
   assert.equal(response.success, true, JSON.stringify(response));
-  for (const name of ["cloud", "cloud-pair", "cloud-submit", "cloud-apply", "cloud-merge"]) assert.ok(response.data.commands.some((entry) => entry.name === name), `${name} missing: ${stderr}`);
+  for (const name of ["cloud", "cloud-pair", "cloud-submit", "cloud-apply", "cloud-merge", "cloud-receive", "cloud-shortcut"]) assert.ok(response.data.commands.some((entry) => entry.name === name), `${name} missing: ${stderr}`);
   child.stdin.end();
   const timer = setTimeout(() => child.kill(), 2_000);
   try { await closed; } finally { clearTimeout(timer); }

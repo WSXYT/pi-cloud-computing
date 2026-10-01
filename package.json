@@ -1,6 +1,6 @@
 {
   "name": "pi-cloud-computing",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Run local Pi sessions on a self-hosted cloud worker and sync the results back safely.",
   "repository": {
     "type": "git",
