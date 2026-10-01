@@ -31,8 +31,11 @@ async function runWorkerService(command: "start" | "stop"): Promise<void> {
     const target = `${domain}/${WORKER_SERVICE_LABEL}`;
     const plist = launchdPlistPath();
     if (command === "start") {
-      try { await execFileAsync("launchctl", ["bootstrap", domain, plist]); } catch { /* Already loaded; kickstart below. */ }
-      await execFileAsync("launchctl", ["kickstart", "-k", target]);
+      try {
+        await execFileAsync("launchctl", ["bootstrap", domain, plist]);
+        return; // RunAtLoad starts a newly registered service; do not kill it again.
+      } catch { /* An already loaded job may need starting, but never force-restart it. */ }
+      await execFileAsync("launchctl", ["kickstart", target]);
     } else {
       await execFileAsync("launchctl", ["bootout", target]);
     }

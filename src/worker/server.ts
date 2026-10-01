@@ -4,6 +4,9 @@ import {
   type Server as HttpsServer,
 } from "node:https";
 import { readFile } from "node:fs/promises";
+import { join } from "node:path";
+import lockfile from "proper-lockfile";
+import { ensurePrivateDirectory } from "../storage.js";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
@@ -88,7 +91,27 @@ async function body(request: IncomingMessage, limit = MAX_ARTIFACT_BYTES): Promi
   return Buffer.concat(chunks);
 }
 
-export async function startWorkerServer(
+export async function startWorkerServer(options: WorkerServerOptions): Promise<WorkerServer> {
+  // Acquire ownership before restoring task state or cleaning interrupted credentials.
+  // Otherwise a duplicate process can mark the live owner's tasks as interrupted.
+  await ensurePrivateDirectory(options.dataDir);
+  const release = await lockfile.lock(join(options.dataDir, "worker-instance"), {
+    realpath: false, stale: 10_000, update: 2_000,
+    retries: { retries: 150, minTimeout: 100, maxTimeout: 100, factor: 1 },
+  });
+  try {
+    const worker = await startWorkerServerOwned(options);
+    let closing: Promise<void> | undefined;
+    return { ...worker, close: () => closing ??= (async () => {
+      try { await worker.close(); } finally { await release(); }
+    })() };
+  } catch (error) {
+    await release();
+    throw error;
+  }
+}
+
+async function startWorkerServerOwned(
   options: WorkerServerOptions,
 ): Promise<WorkerServer> {
   const config = await loadWorkerConfig(options.dataDir);

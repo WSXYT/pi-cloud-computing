@@ -40,6 +40,14 @@ try {
   }
   // The installer process has exited. Only the native service manager can keep this Worker alive.
   await health(true);
+  if (process.platform === 'darwin') {
+    const target = `gui/${process.getuid()}/com.wsxyt.pi-cloud-worker`;
+    const pid = async () => (await run('launchctl', ['print', target])).stdout.match(/\bpid = (\d+)/)?.[1];
+    const firstPid = await pid();
+    assert.ok(firstPid, 'launchd must own a running Worker');
+    await cloud('worker', 'start');
+    assert.equal(await pid(), firstPid, 'start on an already running Worker must not force a restart');
+  }
   const before = JSON.parse((await cloud('worker', 'status')).stdout);
   const { stdout } = await cloud('worker', 'pair');
   const pairLine = stdout.split(/\r?\n/).find(line => line.startsWith('pair-command=/cloud-pair '));
