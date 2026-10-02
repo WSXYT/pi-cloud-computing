@@ -31,6 +31,7 @@ test("renders native macOS and Windows Worker services", () => {
   assert.match(plist, new RegExp(`<key>Label</key><string>${WORKER_SERVICE_LABEL}</string>`));
   assert.match(plist, /<key>RunAtLoad<\/key><true\/>/);
   assert.match(plist, /worker<\/string>/);
+  assert.match(plist, /<key>ProcessType<\/key><string>Interactive<\/string>/, "user-triggered task startup must not inherit launchd background I/O throttling");
   const script = renderWindowsWorkerScript({ dataDir: "C:\\Users\\me\\.pi-cloud", executable: "C:\\Program Files\\nodejs\\node.exe", cliPath: "C:\\pi-cloud\\dist\\cli.js" });
   assert.match(script, /PI_CLOUD_DATA_DIR=C:\\Users\\me\\\.pi-cloud/);
   assert.match(script, /worker serve/);

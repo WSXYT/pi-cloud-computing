@@ -55,7 +55,9 @@ export function renderLaunchdPlist(options: LaunchdPlistOptions): string {
     "</dict>",
     "<key>RunAtLoad</key><true/>",
     "<key>KeepAlive</key><true/>",
-    "<key>ProcessType</key><string>Background</string>",
+    // User-requested interactive work over HTTPS, not XPC-triggered background maintenance.
+    // Background throttles descendant SDK module I/O and stalls cold task startup.
+    "<key>ProcessType</key><string>Interactive</string>",
     `<key>StandardOutPath</key><string>${plistQuote(join(options.dataDir, "worker.log"))}</string>`,
     `<key>StandardErrorPath</key><string>${plistQuote(join(options.dataDir, "worker.log"))}</string>`,
     "<key>Umask</key><integer>63</integer>",
