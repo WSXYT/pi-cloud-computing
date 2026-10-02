@@ -89,7 +89,7 @@ test(`real terminal (${mode}, ${outcome}) streams output, routes literal append 
     assert.ok(["queued", "running"].includes(worker.tasks.exportState()[0]!.status), "literal slash input must not abort the task through a local cloud command");
     terminal.write("FOLLOW_UP_AFTER_TURN");
     await delay(150);
-    terminal.write("\x11"); // Pi's native Ctrl+Q follow-up action, even though local Pi is idle.
+    terminal.write(process.platform === "win32" ? "\x11" : "\x1b\r"); // Native follow-up: Ctrl+Q on Windows, Alt+Enter on POSIX.
     await until(() => worker.tasks.exportState()[0]!.inputs.length === 3);
     assert.equal(worker.tasks.exportState()[0]!.inputs[2]!.delivery, "followUp");
     assert.equal(worker.tasks.exportState()[0]!.inputs[2]!.message, "FOLLOW_UP_AFTER_TURN");

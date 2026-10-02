@@ -84,7 +84,7 @@ for (const mode of ["regular", "fullscreen"] as const) for (const outcome of ["a
       terminal.write("\r"); // Pi's native confirm selects the focused Yes option.
       await until(() => worker.tasks.get(taskId)!.events.some(event => (event.payload.rpc as { type?: string } | undefined)?.type === "extension_ui_closed"));
       terminal.write("QUEUED_PLUGIN_FOLLOWUP");
-      await delay(100); terminal.write("\x11");
+      await delay(100); terminal.write(process.platform === "win32" ? "\x11" : "\x1b\r");
       await until(() => output.includes("Cloud follow-up: QUEUED_PLUGIN_FOLLOWUP"));
       output = "";
       terminal.write("\x1bu"); // Configured native dequeue action.
