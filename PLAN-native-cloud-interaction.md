@@ -1,6 +1,6 @@
 # Native cloud interaction: investigation and acceptance map
 
-Status: capability investigation complete; user approved the generic SDK task-host approach. Product implementation and acceptance remain pending.
+Status: implementation and code-candidate acceptance complete at `3531bd1` (seven green CI jobs, run 36998291775). Final documentation commit must pass its own CI. No deployment or publication is authorized.
 Goal: `muqftjld-loipjn`. This document records implementation evidence, not a change to the confirmed goal.
 
 ## New interaction contract
@@ -11,7 +11,7 @@ Credentials that are available and necessary for the chosen provider should be s
 
 The user additionally requests a generic plugin integration rather than a named-plugin allowlist. Compatibility must be described by capabilities, with unsupported operations visible rather than silently skipped.
 
-## Findings in the current implementation
+## Baseline findings before implementation
 
 | Concern | Evidence | Required observable result |
 |---|---|---|
@@ -73,7 +73,14 @@ This does NOT verify network delivery, terminal focus, overlays, cancellation, a
 - Recovery/security: no automatic task recreation, finalizing preserved, pin before upload, bounded backpressure, safe protocol errors, no out-of-scope port/command exposure.
 - End to end: real process stop and cleanup, file and session return, local continuation, package installation; exact-commit seven-job CI. Fixture probes and unit mocks do not replace these gates.
 
-## Implementation checkpoint
+## Final verification checkpoint
+
+- Code candidate `3531bd1` passed all seven CI jobs: https://github.com/WSXYT/pi-cloud-computing/actions/runs/36998291775. Windows 139/139; Linux/macOS/Docker 138/138; no failures/skips. Native services, package installation, real SDK task execution/stop/credential cleanup/local continuation and nine artifact combinations passed.
+- Native input, queue display/dequeue recovery, default provider/model credential selection and terminal session restoration are implemented and covered; the older outstanding-work notes below are chronological records, not current task status.
+- Unsupported global/editor/persistent-surface/session-replacement/controlled-overlay plugin APIs remain explicit capability limits documented in README, not accepted features. No generic local command/port authorization was added. Offline custom tool views use cached sizes; arbitrary terminals, IMEs and paid providers are not claimed tested.
+- Production dependency audit: zero vulnerabilities. Failed preliminary CI runs and the unproven historical macOS startup stall are recorded in ACCEPTANCE.md. No timeouts were extended to obtain the passing gate.
+
+## Historical implementation checkpoints (superseded by final verification)
 
 - Branch: `feat/native-cloud-interaction`; release baseline remains `7c34f48`.
 - Added `src/client-transcript.ts`: actual Pi assistant/user/tool components, terminal-control sanitization, per-cursor replay deduplication, and compact latest-message/tool snapshots rather than one saved copy per token.

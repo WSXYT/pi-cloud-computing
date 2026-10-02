@@ -2,9 +2,11 @@
 
 A passing unit test, an installed service descriptor, or a skipped job is not platform acceptance. Require **all seven CI jobs for the exact candidate commit**: three native client/service jobs, three cross-platform artifact consumers, and Linux Docker. The current branch's [Actions runs](https://github.com/WSXYT/pi-cloud-computing/actions/workflows/ci.yml?query=branch%3Afeat%2Fnative-cloud-interaction) identify the immutable commit and logs. Do not use an older green run to approve newer code.
 
-## Native SDK interaction candidate / 原生交互候选（CI pending）
+## Native SDK interaction candidate / 原生交互候选（已验证，未部署）
 
-This candidate supersedes the former locked-running-editor contract. Local Windows `npm test` passed **139/139**, zero failures/skips, before the final credential-parser and documentation updates. Final exact-commit CI and package gates remain mandatory; prior release passes are historical evidence only.
+This candidate supersedes the former locked-running-editor contract. Code commit `3531bd1b37ea583fc867c0a3afbb855550f6b912` passed [all seven jobs in run 36998291775](https://github.com/WSXYT/pi-cloud-computing/actions/runs/36998291775): Windows **139/139**, Linux/macOS/Docker **138/138**, zero failures or skips. Each native job passed package smoke and installed-service execution; the production Docker runner and all nine cross-platform artifact combinations passed. Production dependency audit reports zero vulnerabilities. Documentation-only follow-up commits still require their own seven-job gate, identifiable in the Actions link above.
+
+Earlier runs are not counted as passes: `36995109755` exposed PTY fixtures sending Windows Ctrl+Q on POSIX (corrected to native Alt+Enter); `36996900451` exposed a transient notification being replaced before observation (completion guidance is now retained in the transcript) and one macOS task-start stall with insufficient diagnostic detail. The latter gained live task/event-tail diagnostics, not a longer timeout; its historical cause remains unproven. The subsequent complete run passed without weakening stop, credential-cleanup or input assertions.
 
 - Actual Pi assistant/tool components stream and restore one transcript card after a real Pi restart; regular/fullscreen PTY exercises thinking/tool expansion, literal input, Enter steering and configured follow-up.
 - `client-plugin-terminal.test.ts` runs an isolated SDK plugin through a real Worker, authenticated socket and local PTY: custom component closure, Chinese input, resize, native confirm, queue display, configured dequeue, real stop/cleanup and local editing (four variants).
