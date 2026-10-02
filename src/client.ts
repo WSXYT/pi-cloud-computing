@@ -247,7 +247,7 @@ export default async function piCloudExtension(pi: ExtensionAPI): Promise<void> 
   };
   const showResult = (task: CloudTaskState, ctx: ExtensionContext): void => {
     clearTaskUi(ctx);
-    pi.sendMessage({ customType: "pi-cloud-live", content: [statusText(task), task.error ?? ""].filter(Boolean).join("\n"), display: true, details: { taskId: task.taskId, status: task.status } }, { triggerTurn: false });
+    pi.sendMessage({ customType: "pi-cloud-live", content: [statusText(task), task.error ?? "", tr("cloud.resultHistory")].filter(Boolean).join("\n"), display: true, details: { taskId: task.taskId, status: task.status } }, { triggerTurn: false });
     ctx.ui.notify([
       statusText(task), ...(task.error ? [safeDisplayText(task.error)] : []),
       tr("cloud.resultHistory"),

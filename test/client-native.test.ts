@@ -404,7 +404,7 @@ test(`real Worker Pi (${dockerIntegration ? "docker" : "host"}) restores a provi
   const pairing = await updateWorkerState(workerDir, (state) => ({ ...createPairing(state), fingerprint: state.certificateFingerprint! }));
   await client.command({ type: "prompt", message: `/cloud-pair ${serviceUrl ?? worker!.url} ${pairing.fingerprint} ${pairing.code}` });
   await client.command({ type: "prompt", message: "/cloud-submit run the synced tool, then reply" });
-  await until(async () => (await records()).some((record) => ["completed", "failed", "aborted"].includes(record.status)), JSON.stringify(client.events));
+  await until(async () => (await records()).some((record) => ["completed", "failed", "aborted"].includes(record.status)), async () => JSON.stringify({ events: client.events.slice(-12), tasks: (await records()).map(record => ({ status: record.status, result: record.result, tail: record.events.slice(-12) })), stderr: client.stderr }));
   const record = (await records())[0]!;
   assert.equal(record.status, "completed", JSON.stringify({ result: record.result, tail: record.events.slice(-10) }));
   assert.equal(requests.length, 2, JSON.stringify(record.events));
