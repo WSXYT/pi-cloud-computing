@@ -5,7 +5,7 @@ import { visibleWidth, type EditorTheme, type TUI } from "@earendil-works/pi-tui
 
 import { CloudEditor, type CloudEditorState } from "../src/client-editor.js";
 
-test("cloud editor locks ordinary input, keeps shortcuts and sends slash-prefixed append literally", () => {
+test("cloud editor locks preparation only and keeps running drafts editable with stop and literal input", () => {
   const state: CloudEditorState = { locked: true, append: false, status: "F6 · remote task running" };
   let shortcuts = 0;
   let cancelled = 0;
@@ -15,7 +15,7 @@ test("cloud editor locks ordinary input, keeps shortcuts and sends slash-prefixe
   const editor = new CloudEditor(
     { requestRender: () => {}, terminal: { rows: 24 } } as unknown as TUI,
     { borderColor: (text: string) => text } as EditorTheme,
-    { matches: () => false } as unknown as KeybindingsManager,
+    { matches: (data: string, action: string) => action === "tui.input.submit" && data === "\r" } as unknown as KeybindingsManager,
     () => state, (text) => text, () => { cancelled++; state.append = false; }, (text) => literal.push(text), () => { stopped++; },
   );
   editor.onExtensionShortcut = (key) => { if (key !== "f6") return false; shortcuts++; return true; };
@@ -34,7 +34,10 @@ test("cloud editor locks ordinary input, keeps shortcuts and sends slash-prefixe
   state.busy = false;
   editor.handleInput("local");
   assert.equal(editor.getText(), "local");
-  state.locked = true; state.busy = true;
+  state.locked = false; state.busy = true;
+  editor.setText("");
+  editor.handleInput("running draft");
+  assert.equal(editor.getText(), "running draft");
   state.append = true;
   editor.setText("/cloud status");
   editor.handleInput("\r");
@@ -43,6 +46,7 @@ test("cloud editor locks ordinary input, keeps shortcuts and sends slash-prefixe
   assert.equal(editor.getText(), "");
   editor.setText("draft");
   editor.handleInput("\u001b");
-  assert.equal(cancelled, 1);
+  assert.equal(cancelled, 0);
+  assert.equal(stopped, 4);
   assert.equal(editor.getText(), "draft");
 });

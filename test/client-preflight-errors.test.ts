@@ -9,7 +9,7 @@ import { CloudConnection, CloudRequestError } from "../src/client-network.js";
 import { formatCloudError } from "../src/client-errors.js";
 import { loadClientState, saveClientState } from "../src/client-state.js";
 
-for (const failure of ["legacy", "storage"] as const) {
+for (const failure of ["legacy", "storage", "task-ui"] as const) {
   test(`${failure} Worker is rejected before scanning/uploading and the F6 draft survives`, async t => {
     const root = await mkdtemp(join(tmpdir(), "pi-cloud-preflight-failure-"));
     const previous = process.env.PI_CLOUD_CLIENT_STATE;
@@ -26,7 +26,7 @@ for (const failure of ["legacy", "storage"] as const) {
       registerCommand(name: string, options: { handler: Function }) { commands[name] = options.handler; },
       sendUserMessage() { assert.fail("must not resubmit"); }, sendMessage() {},
     } as unknown as ExtensionAPI);
-    t.mock.method(CloudConnection.prototype, "workerInfo", async () => ({ workerId: "worker", capabilities: { runtimeArchiveVersion: 1, ...(failure === "storage" ? { cloudVersion: "0.2.1", storageHealthy: false, storageError: "ENOSPC" } : {}) } }));
+    t.mock.method(CloudConnection.prototype, "workerInfo", async () => ({ workerId: "worker", capabilities: { runtimeArchiveVersion: 1, ...(failure !== "legacy" ? { cloudVersion: "0.2.1", storageHealthy: failure !== "storage", ...(failure === "storage" ? { storageError: "ENOSPC" } : {}) } : {}) } }));
     const upload = t.mock.method(CloudConnection.prototype, "upload", async () => assert.fail("no upload before compatibility/health checks"));
     let draft = ""; const notices: string[] = [];
     const ctx = { cwd: root, mode: "tui", hasUI: true, isIdle: () => true, hasPendingMessages: () => false,
@@ -37,7 +37,8 @@ for (const failure of ["legacy", "storage"] as const) {
     assert.equal(draft, "preserve this draft");
     assert.equal(upload.mock.callCount(), 0);
     assert.equal((await loadClientState()).tasks?.length ?? 0, 0);
-    assert.match(notices.join("\n"), failure === "legacy" ? /Updating the local plugin does not update the server/ : /ENOSPC/);
+    const expected = { legacy: /Updating the local plugin does not update the server/, storage: /ENOSPC/, "task-ui": /task UI v1 required/ };
+    assert.match(notices.join("\n"), expected[failure]);
   });
 }
 

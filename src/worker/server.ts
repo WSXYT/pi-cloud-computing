@@ -280,6 +280,7 @@ async function startWorkerServerOwned(
     certificateFingerprint: state.certificateFingerprint ?? tls.fingerprint,
     capabilities: {
       cloudVersion: CLOUD_VERSION,
+      taskUiVersion: 1,
       storageHealthy: true,
       piVersion: options.piVersion,
       nodeVersion: options.nodeVersion,
@@ -333,6 +334,7 @@ async function startWorkerServerOwned(
       : new PiRpcExecutor(tasks, {
           cwd: options.dataDir,
           runner: createExecutionRunner(config.runner, config.dockerNetwork),
+          onComponent: (taskId, frame) => taskSocket.publishComponent(taskId, frame),
           ...(options.rpcCommand ? { command: options.rpcCommand } : {}),
           ...(options.rpcArgs ? { baseArgs: options.rpcArgs } : {}),
         });
@@ -408,6 +410,10 @@ async function startWorkerServerOwned(
     getState: () => loadWorkerState(options.dataDir),
     flush,
     acceptsInput: (taskId) => executor?.acceptsInput(taskId) ?? true,
+    getComponents: taskId => executor?.getComponents(taskId) ?? [],
+    toolView: (taskId, view) => executor?.requestToolView(taskId, view),
+    dequeue: (taskId, requestId) => executor?.dequeue(taskId, requestId) ?? false,
+    componentInput: (taskId, input) => { executor?.sendComponentInput(taskId, input); },
     answerUi: (response) => {
       if (!executor?.answerUi(response))
         throw new Error("task is no longer accepting dialogs");

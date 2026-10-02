@@ -1,6 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { StringDecoder } from "node:string_decoder";
+import { parseComponentFrame, parseToolPresentation, type ToolViewRequest, type ComponentFrame, type ComponentInput } from "../component-protocol.js";
 
 import {
   parseTaskUiRequest,
@@ -18,12 +19,14 @@ export interface PiRpcExecutorOptions {
   runner?: ExecutionRunner;
   startupTimeoutMs?: number;
   shutdownTimeoutMs?: number;
+  onComponent?: (taskId: string, frame: ComponentFrame) => void;
 }
 
 interface RunningProcess {
   child: ChildProcessWithoutNullStreams;
   closing: boolean;
   done: Promise<void>;
+  components: Map<string, ComponentFrame>;
 }
 
 export class PiRpcExecutor {
@@ -112,6 +115,7 @@ export class PiRpcExecutor {
       child,
       closing: false,
       done: completion.promise,
+      components: new Map(),
     };
     this.processes.set(taskId, running);
     let settled = false;
@@ -197,6 +201,11 @@ export class PiRpcExecutor {
             fail("Pi emitted an invalid remote dialog request");
           }
         }
+        if (rpc.type === "extension_ui_closed" && typeof rpc.id === "string") {
+          const current = this.tasks.get(taskId);
+          if (current?.status === "running" && current.uiRequests?.some(request => request.id === rpc.id))
+            this.tasks.answerUi({ taskId, id: rpc.id, cancelled: true });
+        }
         if (rpc.type === "agent_settled") {
           settled = true;
           clearTimeout(startup);
@@ -263,6 +272,8 @@ export class PiRpcExecutor {
               error: cause instanceof Error ? cause.message : String(cause),
             });
         } finally {
+          for (const id of running.components.keys()) this.options.onComponent?.(taskId, { type: "close", id });
+          running.components.clear();
           this.processes.delete(taskId);
           completion.resolve();
         }
@@ -323,6 +334,30 @@ export class PiRpcExecutor {
     return true;
   }
 
+  dequeue(taskId: string, requestId: string): boolean {
+    const running = this.processes.get(taskId);
+    if (!running || running.closing) return false;
+    this.write(running.child, { type: "cloud_dequeue", requestId });
+    return true;
+  }
+
+  requestToolView(taskId: string, view: ToolViewRequest): void {
+    const running = this.processes.get(taskId);
+    if (!running || running.closing) return;
+    this.write(running.child, { type: "extension_tool_view_request", view });
+  }
+
+  getComponents(taskId: string): ComponentFrame[] {
+    return [...(this.processes.get(taskId)?.components.values() ?? [])];
+  }
+
+  sendComponentInput(taskId: string, input: ComponentInput): boolean {
+    const running = this.processes.get(taskId);
+    if (!running || running.closing || !running.components.has(input.id)) return false;
+    this.write(running.child, { type: "extension_component_input", input });
+    return true;
+  }
+
   async dispose(): Promise<void> {
     this.disposing = true;
     this.unsubscribe();
@@ -370,6 +405,27 @@ export class PiRpcExecutor {
         !Array.isArray(rpc) &&
         "type" in rpc
       ) {
+        if (rpc.type === "extension_tool_view") {
+          try {
+            const view = parseToolPresentation((rpc as Record<string, unknown>).view);
+            this.tasks.log(taskId, { rpc: { type: "extension_tool_view", view } });
+          } catch { onError("Invalid cloud tool presentation"); }
+          return;
+        }
+        if (rpc.type === "extension_component") {
+          try {
+            const frame = parseComponentFrame((rpc as Record<string, unknown>).component);
+            const running = this.processes.get(taskId);
+            if (!running || running.closing) return;
+            if (frame.type === "close") running.components.delete(frame.id);
+            else {
+              if (!running.components.has(frame.id) && running.components.size >= 100) throw new Error("COMPONENT_LIMIT");
+              running.components.set(frame.id, frame);
+            }
+            this.options.onComponent?.(taskId, frame);
+          } catch { onError("Invalid cloud component frame"); }
+          return; // Ephemeral presentation is not a durable task event/token log.
+        }
         this.tasks.log(taskId, { rpc });
         onEvent(rpc as Record<string, unknown>);
       } else

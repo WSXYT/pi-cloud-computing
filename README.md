@@ -47,9 +47,9 @@ try {
 
 > `main` 链接安装主分支。开发/验收分支不等于已发布版本；生产更新前核对 [ACCEPTANCE.md](ACCEPTANCE.md) 和对应 commit 的 CI。
 
-### 0.2.1 的服务端兼容要求
+### 原生交互的服务端兼容要求
 
-只更新本地插件**不会更新服务器**。本版在上传前检查 Worker 版本和任务存储健康状态；旧 Worker 必须先升级到 0.2.1 或更高版本。先检查原任务、保留数据，再安排服务升级/重启，用 `/cloud-status` 核对两端版本。原生 Worker 使用其安装包解析到的 Pi，避免误用 PATH 中的旧版本。升级不代表重跑原任务。
+只更新本地插件**不会更新服务器**。本版在上传前检查 Worker 的 `taskUiVersion: 1` 能力及任务存储健康状态；仅有 0.2.1 版本号不足以证明支持新版 SDK 交互，旧 Worker 必须先升级到支持该能力的版本。先检查原任务、保留数据，再安排服务升级/重启，用 `/cloud-status` 核对两端版本。原生 Worker 使用其安装包解析到的 Pi，避免误用 PATH 中的旧版本。升级不代表重跑原任务。
 
 ### 日常使用
 
@@ -60,15 +60,15 @@ try {
 | 空闲时 **Enter** | 正常交给本地 Pi |
 | 空闲时 **F6** | 将当前输入作为云端任务，打开上传范围与授权确认 |
 | 准备/上传时 **Esc / Ctrl+C / F6** | 取消实际请求，恢复原输入 |
-| 云端运行时 | 输入区显示进度并默认锁定，不会把普通输入偷偷发给云端 |
+| 云端运行时 **Enter** | 输入区保持可编辑，输入以 steer 语义追加给当前云端任务，不启动本地模型 |
 | 运行时 **Esc / Ctrl+C** | 请求云端停止；停止未确认时再按 Esc 可只结束本地等待 |
-| 运行时 **F6 → 追加指令** | 明确进入追加模式；Enter 只发送给当前云端任务 |
-| 追加时 **Esc** | 返回进度，保留未发送的草稿 |
+| 原生 follow-up 快捷键（例如 **Ctrl+Q**） | 排队等待云端当前轮次结束；遵循 `/hotkeys` 配置 |
+| 原生取回队列快捷键 / **`/cloud-dequeue`** | 确认从云端队列取回后恢复到编辑区，不自动重发；`/cloud-inputs` 保留恢复副本 |
 | 完成/失败后 | 释放输入区；普通 Enter 可继续本地，不必先处理结果 |
 
-云端文字增量显示在原生进度区；完整回复、工具结果和错误进入可见对话记录，不自动触发本地模型。停止确认和尾部事件接收完成后释放输入区。
+云端回复、思考和工具调用使用 Pi 原生消息/工具组件，支持流式更新、Ctrl+T 思考切换和 Ctrl+O 工具展开；不自动触发本地模型。队列显示区区分 steer 和 follow-up。停止确认、尾部事件接收与运行时凭据清理完成后，输入恢复本地用途。
 
-追加模式中的 `/cloud-abort ...`、其他 `/...` 或 `!...` **按文字发送**，不会被误当成本地管理命令。F6 菜单也提供返回本地、停止、重连。远程工具需要确认时会显示原生 Pi 对话框。
+运行中输入的 `/cloud-abort ...`、其他 `/...` 或 `!...` **按文字发送**，不会被误当成本地管理命令。F6 菜单也提供返回本地、停止、重连。远程工具需要确认时会显示原生 Pi 对话框。插件组件拥有焦点时，Escape 交给组件，Ctrl+C 停止云端任务；普通编辑区中 Escape 先关闭补全，再停止任务。
 
 默认快捷键是 F6。若终端或其他扩展占用该键，先检查 `/hotkeys`，在 **`/cloud → 更多 → 云端快捷键`** 选择未使用的 F6–F12，或选择 `disabled` 禁用。保存后重新加载扩展，实际注册的按键同步显示在 `/hotkeys`。禁用时通过 `/cloud` 操作，普通文字仍被输入事件保护，不会自动发给模型。
 
@@ -79,11 +79,17 @@ try {
 - **Git 工作区**：必需；Git 历史、已跟踪文件改动和选中的非忽略新文件。
 - **Pi 运行环境**：插件、本地包、skills、prompts、themes 与已脱敏 Provider 配置。
 - **当前对话**：可取消，改为新建云端会话。
-- **Pi Provider 凭据**：检测到时显示，**默认不选**，必须明确授权。Worker 不继承宿主机或本机的登录、环境密钥；已加密缓存的凭据也必须按任务授权。不选时需另外明确确认“所选模型端点无需鉴权”，否则返回清单选择凭据或取消。普通付费/登录模型通常不能无凭据运行。
+- **Pi Provider 凭据**：检测到当前 Provider/模型可用凭据时**默认勾选**，仍须最终明确授权。授权包可能包含其他 Provider 的 auth.json、配置密钥和引用的环境变量，请核对范围；默认勾选并不代表只发送一个密钥。Worker 不继承宿主机或本机的登录、环境密钥；已加密缓存的凭据也必须按任务授权。不选时需另外明确确认“所选模型端点无需鉴权”，否则返回清单选择凭据或取消。普通付费/登录模型通常不能无凭据运行。
 
 清单和“下一步”不会上传。最后确认才会传输；拒绝返回清单，退出保留草稿。每个任务使用独立副本，不要求手动在服务器克隆项目。
 
 **Git 历史里已提交的秘密仍会随仓库上传**，取消凭据选项不会删除这些历史。授权凭据通过固定证书的 TLS 发送，在 Worker 加密存储，执行时临时解密，结束后清理明文；可通过 `/cloud` 撤销存储的凭据。
+
+### 插件交互能力与边界
+
+任务在隔离 SDK 进程中加载插件。支持标准 confirm/select/input/editor、作用域内 custom 组件，以及云端执行的自定义工具渲染；闭包和回调结果留在云端，本地不执行服务器发送的代码，也不镜像远端整页终端。组件传输限制大小、速率和控制序列。当前适配严格固定 Pi **0.85.1**，两处主题/按键读取适配随版本验证；不支持的版本明确报错。
+
+这不是“所有插件均兼容”的承诺：全局终端钩子、替换本地编辑器、持久 header/footer/widget、会话替换、受控 overlay API 尚未支持，调用会明确失败，不会自动同意或伪装成文本日志。浏览器、本地端口、系统终端和设备能力不自动转发，也不执行远端提供的本地命令。离线自定义工具显示使用缓存宽度，完整渲染重排需要仍在运行的任务。
 
 ### 断线、取消与重试
 
@@ -157,17 +163,23 @@ Unverified/dirty source checkouts do not emit installer links; use a verified in
 ### Input and authorization
 
 - **Enter** stays local while idle. **F6** submits the editor draft to cloud preflight.
-- Review the Git workspace, runtime resources, conversation and optional credentials. Credentials are **off by default**. Only the final consent uploads anything.
+- Review the Git workspace, runtime resources, conversation and optional credentials. Detected current-provider/model credentials start **selected**, but only final consent authorizes their upload or reuse. The bundle may include other providers’ auth.json/config secrets and referenced environment variables; inspect the scope.
 - During preparation/upload, **Esc, Ctrl+C or F6 cancels the request and restores the draft**.
-- During execution, **Esc/Ctrl+C requests a real remote stop**. While it remains unconfirmed, a second Esc only ends local waiting. Streaming text appears in the native progress area; final replies/tool results/errors appear in the visible transcript without starting a local model turn.
-- During execution the input area shows progress and is locked by default. **F6 → Append instruction** explicitly enables remote input; Enter sends it, Esc preserves the draft and returns to progress.
-- Slash-prefixed and bang-prefixed instructions in append mode are sent **literally**, not interpreted as local commands. Remote authorization uses native Pi dialogs.
+- During execution, **Esc/Ctrl+C requests a real remote stop**. While it remains unconfirmed, a second Esc only ends local waiting. Replies, thinking and tools use Pi’s native components with streaming, Ctrl+T and Ctrl+O, without starting a local model turn.
+- During execution the editor stays editable. **Enter steers the cloud task**, while the configured native follow-up shortcut (such as Ctrl+Q) queues input for after the current turn. The configured dequeue shortcut or `/cloud-dequeue` retrieves queued text into the editor after acknowledgement; it never automatically resubmits it. `/cloud-inputs` retains recovery copies.
+- Slash-prefixed and bang-prefixed instructions while running are sent **literally**, not interpreted as local commands. Remote authorization uses native Pi dialogs. Escape first dismisses editor autocomplete; inside a plugin component it belongs to that component, while Ctrl+C remains the task-stop path.
 - Completion/failure releases the editor; you may continue locally before receiving results.
 - Choose an unused F6–F12 through **`/cloud → More → Cloud shortcut`**. Check conflicts in `/hotkeys` first; saving reloads extensions and updates the actual registered shortcut. Choose `disabled` to use `/cloud` instead; ordinary text is still protected by the input hook.
 
 The Worker never inherits server/client logins or environment keys. Cached credentials still require authorization for each task. Leaving credentials unchecked requires a separate explicit declaration that the selected model endpoint needs no authentication; otherwise return to the checklist or cancel. Ordinary paid/login-based models generally cannot run without credentials.
 
 Uploads contain an independent task copy. Runtime synchronization includes plugins/packages, skills, prompts, themes and redacted provider configuration. Git history can still contain committed secrets even when credential sharing is disabled. Explicitly authorized credentials are TLS-pinned, encrypted at rest, temporarily materialized for execution and cleaned up afterward; revoke them through `/cloud`.
+
+### Plugin capabilities and limits
+
+Plugins load in an isolated SDK task process. Standard confirm/select/input/editor dialogs, scoped custom components and cloud-side custom tool renderers are supported. Closures/results stay cloud-side; the client never evaluates server-supplied code or mirrors a whole remote terminal. Frames have bounded size/rate and restricted terminal sequences. The adapter requires exactly Pi **0.85.1**, including two version-tested theme/keybinding reads; unsupported versions fail explicitly.
+
+This is not universal plugin compatibility: global terminal hooks, local editor replacement, persistent header/footer/widget surfaces, session replacement and controlled overlay APIs currently fail explicitly. Browser/port/system-terminal/device access is not automatically forwarded, and remote-supplied local commands are never executed. Offline custom tool views use cached widths; complete reflow requires a live task.
 
 ### Recovery and results
 
@@ -181,7 +193,7 @@ Completed results are automatically validated and cached locally, without applyi
 
 ### Operations and security
 
-**Updating the local plugin does not update the server.** This client requires Worker 0.2.1+ diagnostics and checks storage health before uploads. Inspect original tasks, preserve data, then schedule the server upgrade/restart. `/cloud-status` shows both versions. Native Workers resolve Pi from their own installation, not an older global Pi on PATH. Upgrading is not permission to rerun tasks.
+**Updating the local plugin does not update the server.** This client requires Worker capability `taskUiVersion: 1` and checks storage health before uploads. A 0.2.1 version string alone does not establish SDK interaction compatibility. Inspect original tasks, preserve data, then schedule the server upgrade/restart. `/cloud-status` shows both versions. Native Workers resolve Pi from their own installation, not an older global Pi on PATH. Upgrading is not permission to rerun tasks.
 
 Use `node <CLI> worker status|health|pair|start|stop|uninstall`, where `<CLI>` is `~/.pi-cloud/source/dist/src/cli.js`. Linux uses systemd (sudo for service management), macOS uses a user launchd agent loaded at login, and Windows uses a least-privilege S4U scheduled task without an interactive-login requirement. Closing the installer terminal does not stop the Worker. `worker uninstall` stops/unregisters the service while retaining source, task data, configuration, certificates and credentials; Linux requires sudo. macOS/Windows logs are in the Worker data directory's `worker.log`; Linux uses `journalctl -u pi-cloud-worker`.
 

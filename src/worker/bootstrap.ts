@@ -9,12 +9,12 @@ let child: ChildProcess | undefined;
 for (const signal of ["SIGTERM", "SIGINT"] as const)
   process.on(signal, () => child?.kill(signal));
 
-function run(command: string, args: string[], cwd: string): Promise<number> {
+function run(command: string, args: string[], cwd: string, interactive = false): Promise<number> {
   return new Promise((resolve, reject) => {
     child = spawn(command, args, {
       cwd,
       env: process.env,
-      stdio: [command === "pi" || args[0] === process.env.PI_CLOUD_PI_ENTRY ? "inherit" : "ignore", "inherit", "inherit"],
+      stdio: [interactive ? "inherit" : "ignore", "inherit", "inherit"],
     });
     child.once("error", reject);
     child.once("close", (code) => resolve(code ?? 1));
@@ -50,8 +50,7 @@ try {
         `runtime dependency installation failed (${code}) at ${path}`,
       );
   }
-  const piEntry = process.env.PI_CLOUD_PI_ENTRY;
-  process.exitCode = await run(piEntry ? process.execPath : "pi", [...(piEntry ? [piEntry] : []), ...process.argv.slice(2)], process.cwd());
+  process.exitCode = await run(process.execPath, [join(runtime, "worker", "sdk-entry.js"), ...process.argv.slice(2)], process.cwd(), true);
 } catch (error) {
   process.stdout.write(
     `${JSON.stringify({

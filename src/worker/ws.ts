@@ -16,8 +16,10 @@ import { PiCloudError } from "../errors.js";
 import { authenticateToken } from "./pairing.js";
 import type { WorkerState } from "./state.js";
 import type { WorkerTaskManager } from "./tasks.js";
+import type { ToolViewRequest, ComponentFrame, ComponentInput } from "../component-protocol.js";
 
 export interface TaskSocket {
+  publishComponent(taskId: string, component: ComponentFrame): void;
   close(): Promise<void>;
 }
 
@@ -31,6 +33,10 @@ export function attachTaskWebSocket(
     flush?: () => Promise<void>;
     acceptsInput?: (taskId: string) => boolean;
     answerUi?: (response: TaskUiResponse) => void;
+    getComponents?: (taskId: string) => ComponentFrame[];
+    toolView?: (taskId: string, view: ToolViewRequest) => void;
+    dequeue?: (taskId: string, requestId: string) => boolean;
+    componentInput?: (taskId: string, input: ComponentInput) => void;
     deferAbort?: boolean;
     enforceRunner?: boolean;
   } = {},
@@ -63,10 +69,34 @@ export function attachTaskWebSocket(
   const sendState = (socket: WebSocket, taskId: string): void => {
     const snapshot = tasks.snapshot(taskId);
     send(socket, { type: "task_state", state: snapshot });
+    for (const component of options.getComponents?.(taskId) ?? []) send(socket, { type: "task_component", taskId, component });
     if (snapshot.result && !snapshot.finalizing)
       send(socket, { type: "task_result", result: snapshot.result });
   };
   let broadcasts = Promise.resolve();
+  let componentBroadcast = Promise.resolve();
+  let pumpingComponents = false, closing = false;
+  const componentUpdates = new Map<string, { taskId: string; component: ComponentFrame }>();
+  const publishComponent = (taskId: string, component: ComponentFrame): void => {
+    if (closing) return;
+    componentUpdates.set(`${taskId}:${component.id}`, { taskId, component });
+    if (pumpingComponents) return;
+    pumpingComponents = true;
+    componentBroadcast = (async () => {
+      try {
+        while (componentUpdates.size && !closing) {
+          const updates = [...componentUpdates.values()]; componentUpdates.clear();
+          const auth = await currentState();
+          for (const [socket, client] of sockets) {
+            if (!authenticateToken(auth, client.token)) { socket.close(4003, "AUTH_REJECTED"); continue; }
+            for (const update of updates) if (client.tasks.has(update.taskId) && !client.replaying.has(update.taskId))
+              send(socket, { type: "task_component", ...update });
+          }
+        }
+      } catch { for (const socket of sockets.keys()) socket.close(1011, "Worker UI unavailable"); }
+      finally { pumpingComponents = false; }
+    })();
+  };
   const unsubscribe = tasks.subscribe((event) => {
     broadcasts = broadcasts
       .then(async () => {
@@ -200,6 +230,19 @@ export function attachTaskWebSocket(
             tasks.answerUi(frame.response);
             options.answerUi(frame.response);
             await options.flush?.();
+          } else if (frame.type === "task_dequeue") {
+            requestType = frame.type;
+            if (!client.tasks.has(frame.taskId)) throw new PiCloudError("TASK_NOT_ACTIVE", "Subscribe to the task before interacting");
+            await options.flush?.();
+            if (!options.dequeue?.(frame.taskId, frame.requestId)) throw new PiCloudError("TASK_NOT_ACTIVE", "Task is no longer accepting queue edits");
+          } else if (frame.type === "task_tool_view_request") {
+            requestType = frame.type;
+            if (!client.tasks.has(frame.taskId)) throw new PiCloudError("TASK_NOT_ACTIVE", "Subscribe to the task before interacting");
+            options.toolView?.(frame.taskId, frame.view);
+          } else if (frame.type === "task_component_input") {
+            requestType = frame.type;
+            if (!client.tasks.has(frame.taskId)) throw new PiCloudError("TASK_NOT_ACTIVE", "Subscribe to the task before interacting");
+            options.componentInput?.(frame.taskId, frame.input);
           } else if (frame.type === "task_abort") {
             requestType = frame.type;
             client.tasks.add(frame.taskId);
@@ -260,12 +303,16 @@ export function attachTaskWebSocket(
     });
   });
   return {
+    publishComponent,
     close: async () => {
+      closing = true;
+      componentUpdates.clear();
       unsubscribe();
       clearInterval(revocationCheck);
       server.off("upgrade", upgrade);
       for (const socket of sockets.keys()) socket.terminate();
       await broadcasts;
+      await componentBroadcast;
       await new Promise<void>((resolve) => wss.close(() => resolve()));
     },
   };

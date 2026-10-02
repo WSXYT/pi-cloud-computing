@@ -176,7 +176,7 @@ test("retry uses the failed task's Worker without switching the default or losin
   } as unknown as ExtensionAPI;
   const ctx = {
     cwd: root, hasUI: true, isIdle: () => true, hasPendingMessages: () => false,
-    sessionManager: { getSessionId: () => "local-session", getSessionName: () => "existing", getSessionFile: () => sessionPath },
+    sessionManager: { getSessionId: () => "local-session", getSessionName: () => "existing", getSessionFile: () => sessionPath, getEntries: () => [] },
     ui: { setStatus() {}, setWidget() {}, confirm: async () => true, notify(message: string) { notifications.push(message); } },
   } as unknown as ExtensionCommandContext;
   const contacted: string[] = [];
@@ -326,6 +326,7 @@ test("registers the cloud command surface", async () => {
     "cloud-receive",
     "cloud-local",
     "cloud-tasks",
+    "cloud-dequeue",
     "cloud-inputs",
     "cloud-secrets",
     "cloud-worker",

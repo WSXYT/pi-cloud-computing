@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -43,11 +43,15 @@ test(`real terminal (${mode}, ${outcome}) streams output, routes literal append 
   await writeFile(join(agentDir, "models.json"), JSON.stringify({ providers: { fixture: { api: "openai-completions", apiKey: "fixture", baseUrl: "http://127.0.0.1:1/v1", models: [{ id: "stub" }] } } }));
   const env = Object.fromEntries(Object.entries(process.env).filter(([key, value]) => value !== undefined && /^(path|pathext|systemroot|windir|comspec|temp|tmp|home|userprofile|appdata|localappdata|lang|lc_all)$/i.test(key))) as Record<string, string>;
   const cli = fileURLToPath(new URL("./cli.js", import.meta.resolve("@earendil-works/pi-coding-agent")));
-  const terminal = spawn(process.execPath, [cli, "--no-extensions", "--no-skills", "--no-prompt-templates", "--no-themes", "-e", fileURLToPath(new URL("../../src/client.ts", import.meta.url)), "--session", sessionFile, "--tui-mode", mode], { cwd: root, cols: 100, rows: 30, name: "xterm-256color", env: { ...env, TERM: "xterm-256color", PI_CODING_AGENT_DIR: agentDir, PI_CLOUD_CLIENT_STATE: join(agentDir, "pi-cloud.json") } });
+  const launch = () => spawn(process.execPath, [cli, "--no-extensions", "--no-skills", "--no-prompt-templates", "--no-themes", "-e", fileURLToPath(new URL("../../src/client.ts", import.meta.url)), "--session", sessionFile, "--tui-mode", mode], { cwd: root, cols: 100, rows: 30, name: "xterm-256color", env: { ...env, TERM: "xterm-256color", PI_SKIP_VERSION_CHECK: "1", PI_CODING_AGENT_DIR: agentDir, PI_CLOUD_CLIENT_STATE: join(agentDir, "pi-cloud.json") } });
   let output = "";
   let exited = false;
-  terminal.onData(data => { output += data; });
-  const exit = new Promise<void>(resolve => terminal.onExit(() => { exited = true; resolve(); }));
+  let terminal = launch();
+  const observe = () => {
+    terminal.onData(data => { output += data; });
+    return new Promise<void>(resolve => terminal.onExit(() => { exited = true; resolve(); }));
+  };
+  let exit = observe();
   const until = async (predicate: () => boolean, budgetMs = 10_000) => {
     for (let n = 0; n < budgetMs / 50; n++) { if (predicate()) return; if (exited) break; await delay(50); }
     assert.fail(`Terminal did not reach expected state:\n${output.slice(-12000)}`);
@@ -55,32 +59,56 @@ test(`real terminal (${mode}, ${outcome}) streams output, routes literal append 
   try {
     // Cold Pi/JIT startup competes with native Worker tests; UI action waits remain 10s.
     await until(() => output.includes("Esc stop"), 30_000);
-    worker.tasks.log(task.taskId, { rpc: { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "LIVE_DELTA_中文" } } });
-    await until(() => output.includes("LIVE_DELTA_中文"));
+    worker.tasks.log(task.taskId, { rpc: { type: "message_update", message: { role: "assistant", content: [{ type: "thinking", thinking: "REMOTE_THINKING" }, { type: "text", text: "LIVE_DELTA_中文" }] }, assistantMessageEvent: { type: "text_delta", delta: "LIVE_DELTA_中文" } } });
+    await until(() => output.includes("LIVE_DELTA_中文") && output.includes("REMOTE_THINKING"));
+    output = "";
+    terminal.write("\x14"); // Native Ctrl+T: thinking visibility.
+    await until(() => output.includes("Thinking..."));
+    assert.ok(!output.includes("REMOTE_THINKING"));
+    terminal.write("\x14");
+    await until(() => output.includes("REMOTE_THINKING"));
     worker.tasks.log(task.taskId, { rpc: { type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "REMOTE_FINAL_TRANSCRIPT" }] } } });
     await until(() => output.includes("REMOTE_FINAL_TRANSCRIPT"));
-    worker.tasks.log(task.taskId, { rpc: { type: "tool_execution_end", toolName: "fixture", isError: true, result: { content: [{ type: "text", text: "REMOTE_TOOL_FAILURE" }] } } });
+    worker.tasks.log(task.taskId, { rpc: { type: "tool_execution_end", toolCallId: "fixture-call", toolName: "read", isError: true, result: { content: [{ type: "text", text: "REMOTE_TOOL_FAILURE\n" + Array.from({ length: 40 }, (_, i) => `detail ${i}`).join("\n") + "\nEXPANDED_TOOL_END" }] } } });
     await until(() => output.includes("REMOTE_TOOL_FAILURE"));
-    terminal.write("MUST_NOT_SEND\r");
-    await delay(300);
-    assert.equal(worker.tasks.exportState()[0]!.inputs.length, 0);
+    output = "";
+    terminal.write("\x0f"); // Native Ctrl+O: expand tool output.
+    await until(() => output.includes("EXPANDED_TOOL_END"));
+    terminal.write("\x0f");
+    terminal.write("DIRECT_CLOUD_APPEND\r");
+    await until(() => worker.tasks.exportState()[0]!.inputs.length === 1);
+    assert.equal(worker.tasks.exportState()[0]!.inputs[0]!.message, "DIRECT_CLOUD_APPEND");
+    assert.equal(worker.tasks.exportState()[0]!.inputs[0]!.delivery, "steer");
     terminal.resize(45, 20);
     terminal.resize(100, 30);
-    terminal.write("\x1b[17~"); // F6 (xterm / Windows Terminal).
-    await until(() => output.includes("Append instruction"));
-    terminal.write("\r");
-    await until(() => output.includes("Append mode"));
     terminal.write("\x1b[200~/cloud-abort 中文 literal\x1b[201~");
     await delay(150);
     terminal.write("\r");
-    await until(() => worker.tasks.exportState()[0]!.inputs.length === 1);
-    assert.equal(worker.tasks.exportState()[0]!.inputs[0]!.message, "/cloud-abort 中文 literal");
+    await until(() => worker.tasks.exportState()[0]!.inputs.length === 2);
+    assert.equal(worker.tasks.exportState()[0]!.inputs[1]!.message, "/cloud-abort 中文 literal");
     assert.ok(["queued", "running"].includes(worker.tasks.exportState()[0]!.status), "literal slash input must not abort the task through a local cloud command");
+    terminal.write("FOLLOW_UP_AFTER_TURN");
+    await delay(150);
+    terminal.write("\x11"); // Pi's native Ctrl+Q follow-up action, even though local Pi is idle.
+    await until(() => worker.tasks.exportState()[0]!.inputs.length === 3);
+    assert.equal(worker.tasks.exportState()[0]!.inputs[2]!.delivery, "followUp");
+    assert.equal(worker.tasks.exportState()[0]!.inputs[2]!.message, "FOLLOW_UP_AFTER_TURN");
     if (outcome === "abort") {
       terminal.write("\x1b");
       await until(() => worker.tasks.get(task.taskId)?.status === "aborted");
     } else worker.tasks.settle(task.taskId, "completed");
     await until(() => output.includes("input area is released"));
+    if (outcome === "completed") {
+      terminal.kill(); await exit;
+      output = ""; exited = false;
+      terminal = launch(); exit = observe();
+      await until(() => output.includes("REMOTE_FINAL_TRANSCRIPT"), 30_000);
+      terminal.write("\x0f");
+      await until(() => output.includes("EXPANDED_TOOL_END"));
+      assert.equal(worker.tasks.exportState().length, 1, "display restoration must not recreate a task");
+      const entries = (await readFile(sessionFile, "utf8")).trim().split("\n").map(line => JSON.parse(line));
+      assert.equal(entries.filter(entry => entry.type === "custom_message" && entry.customType === "pi-cloud-native").length, 1, "reloading must retain one native transcript card");
+    }
     terminal.write("LOCAL_DRAFT");
     await until(() => output.includes("LOCAL_DRAFT"));
     terminal.write("\x1b[17~");

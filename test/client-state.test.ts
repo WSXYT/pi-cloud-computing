@@ -93,7 +93,7 @@ test("accepts a Windows BOM without losing state, and preserves corrupt JSON on 
 
 test("serializes concurrent read-modify-write updates to shared client state", async (t) => {
   const dir = await mkdtemp(join(tmpdir(), "pi-cloud-state-lock-"));
-  t.after(() => rm(dir, { recursive: true, force: true }));
+  t.after(() => rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }));
   const path = join(dir, "state.json");
   await Promise.all(Array.from({ length: 12 }, (_, index) => updateClientState((state) => ({
     ...state,

@@ -2,8 +2,9 @@ import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+import type { CloudQueue } from "./client-queue.js";
 import type { TransferProgress } from "./client-network.js";
-import type { GitBaseline, Locale, SessionCursor, TaskInput, TaskSpec, TaskStatus } from "./protocol.js";
+import type { GitBaseline, Locale, SessionCursor, TaskEvent, TaskInput, TaskSpec, TaskStatus } from "./protocol.js";
 import { withPrivateFileLock, writePrivateJson } from "./storage.js";
 
 export interface CloudConnectionState {
@@ -45,6 +46,10 @@ export interface CloudTaskState {
   error?: string;
   requestFailure?: TransferProgress & { code: string; artifactKind?: string; serverCause?: string };
   outcomeUnknown?: boolean;
+  nativeTranscript?: TaskEvent[];
+  cloudQueue?: CloudQueue;
+  dequeueRequest?: { id: string; backup: CloudQueue };
+  dequeuedDraft?: string;
 }
 
 export const CLOUD_SHORTCUTS = ["f6", "f7", "f8", "f9", "f10", "f11", "f12", "disabled"] as const;

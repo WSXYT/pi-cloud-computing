@@ -5,7 +5,8 @@ import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 
 import { WorkerTaskManager } from "../src/worker/tasks.js";
-import { PiRpcExecutor } from "../src/worker/rpc.js";
+import { PiRpcExecutor, type PiRpcExecutorOptions } from "../src/worker/rpc.js";
+import type { ComponentFrame } from "../src/component-protocol.js";
 import type { TaskSpec } from "../src/protocol.js";
 
 const task: TaskSpec = {
@@ -44,6 +45,7 @@ async function runFake(
   t: TestContext,
   script: string,
   command = process.execPath,
+  componentOptions: Pick<PiRpcExecutorOptions, "onComponent"> = {},
 ) {
   const tasks = new WorkerTaskManager();
   const record = tasks.create({
@@ -53,6 +55,7 @@ async function runFake(
   const cwd = await mkdtemp(join(tmpdir(), "pi-cloud-rpc-"));
   let disposed = 0;
   const executor = new PiRpcExecutor(tasks, {
+    ...componentOptions,
     command,
     baseArgs: [
       "-e",
@@ -106,6 +109,19 @@ test("runs a Pi RPC-compatible process and forwards its events", async (t) => {
       JSON.stringify(event.payload).includes("agent_settled"),
     ),
   );
+});
+
+test("child component frames stay out of the journal and close when the process exits", async t => {
+  const frames: ComponentFrame[] = [];
+  const record = await runFake(t, `process.stdin.once('data',()=>{
+    emit({type:'agent_start'});
+    emit({type:'extension_component',component:{type:'open',id:'child-component'}});
+    emit({type:'extension_component',component:{type:'frame',id:'child-component',revision:1,width:80,lines:['EPHEMERAL_COMPONENT']}});
+    emit({type:'agent_settled'});
+  })`, process.execPath, { onComponent: (_id, frame) => frames.push(frame) });
+  assert.equal(record.status, "completed");
+  assert.deepEqual(frames.map(frame => frame.type), ["open", "frame", "close"]);
+  assert.ok(record.events.every(event => !JSON.stringify(event).includes("EPHEMERAL_COMPONENT")));
 });
 
 test("does not report success for a nonzero exit after agent_settled", async (t) => {

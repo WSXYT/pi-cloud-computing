@@ -42,7 +42,7 @@ for (const scenario of ["reconnect", "stop"] as const) {
     await extension(fake);
     t.mock.timers.enable({ apis: ["setTimeout"] });
     await handlers.session_start!({}, ctx);
-    assert.deepEqual(await handlers.input!({ text: "still locked" }, ctx), { action: "handled" });
+    assert.deepEqual(await handlers.input!({ text: "queued cloud instruction" }, ctx), { action: "handled" });
     if (scenario === "stop") {
       await handlers["cloud-abort"]!("", ctx);
       t.mock.timers.tick(30_000);
@@ -56,7 +56,9 @@ for (const scenario of ["reconnect", "stop"] as const) {
     assert.deepEqual(await handlers.input!({ text: "local again" }, ctx), { action: "continue" });
     const task = (await loadClientState()).tasks![0]!;
     assert.equal(task.status, "running");
-    assert.equal(task.pendingInputs, undefined);
+    assert.equal(task.pendingInputs?.length, 1, "unacknowledged cloud input must survive local wait expiry");
+    assert.equal(task.pendingInputs[0]?.message, "queued cloud instruction");
+    assert.equal(task.pendingInputs[0]?.delivery, "steer");
     assert.ok(notifications.some(text => text.includes("may still be running")));
     await handlers.session_shutdown!({}, ctx);
   });

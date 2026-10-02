@@ -12,32 +12,51 @@ export class CloudEditor extends CustomEditor {
   constructor(
     tui: TUI,
     theme: EditorTheme,
-    keybindings: KeybindingsManager,
+    private readonly cloudKeybindings: KeybindingsManager,
     private readonly getCloudState: () => CloudEditorState,
     private readonly accent: (text: string) => string,
     private readonly cancelAppend: () => void,
-    private readonly submitLiteral: (text: string) => void,
+    private readonly submitLiteral: (text: string, delivery?: "steer" | "followUp") => void,
     private readonly requestStop: () => void = () => {},
+    private readonly toggleCloudThinking: () => void = () => {},
+    private readonly prepareFollowUp: () => void = () => {},
+    private readonly dequeueCloud: () => void = () => {},
   ) {
-    super(tui, theme, keybindings);
+    super(tui, theme, cloudKeybindings);
   }
 
   override handleInput(data: string): void {
     const state = this.getCloudState();
-    if (state.append && matchesKey(data, Key.escape)) {
+    if (this.cloudKeybindings.matches(data, "app.thinking.toggle")) {
+      this.toggleCloudThinking();
+      super.handleInput(data);
+      return;
+    }
+    if (this.cloudKeybindings.matches(data, "app.tools.expand")) {
+      super.handleInput(data);
+      return;
+    }
+    if (state.append && !(state.busy ?? false) && matchesKey(data, Key.escape)) {
       this.cancelAppend();
       return;
     }
     if ((state.busy ?? state.locked) && (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl("c")))) {
+      if (matchesKey(data, Key.escape) && this.isShowingAutocomplete()) {
+        super.handleInput(data);
+        return;
+      }
       this.requestStop();
       return;
     }
-    if (state.append && matchesKey(data, Key.enter) && /^[\/!]/.test(this.getExpandedText().trimStart())) {
+    if (state.append && this.cloudKeybindings.matches(data, "app.message.dequeue")) { this.dequeueCloud(); return; }
+    const followUp = state.append && this.cloudKeybindings.matches(data, "app.message.followUp");
+    if (state.append && (followUp || this.cloudKeybindings.matches(data, "tui.input.submit")) && !this.isShowingAutocomplete() && /^[\/!]/.test(this.getExpandedText().trimStart())) {
       const text = this.getExpandedText();
       this.setText("");
-      this.submitLiteral(text);
+      this.submitLiteral(text, followUp ? "followUp" : "steer");
       return;
     }
+    if (followUp && this.getExpandedText().trim()) this.prepareFollowUp();
     if (state.locked && !state.append) {
       if (this.onExtensionShortcut?.(data)) return;
       if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl("c")) || matchesKey(data, Key.ctrl("d"))) super.handleInput(data);

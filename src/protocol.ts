@@ -1,4 +1,5 @@
 import { PROTOCOL_VERSION } from "./version.js";
+import { parseComponentFrame, parseComponentInput, parseToolPresentation, parseToolViewRequest, type ToolPresentation, type ToolViewRequest, type ComponentFrame, type ComponentInput } from "./component-protocol.js";
 import {
   decodeBase64,
   validateIdentifier,
@@ -44,6 +45,7 @@ export interface ProtocolError {
 
 export interface WorkerCapabilities {
   cloudVersion?: string;
+  taskUiVersion?: number;
   storageHealthy?: boolean;
   storageError?: string;
   piVersion: string;
@@ -185,6 +187,9 @@ export type ClientFrame =
   | { type: "task_create"; task: TaskSpec }
   | { type: "task_input"; input: TaskInput }
   | { type: "task_ui_response"; response: TaskUiResponse }
+  | { type: "task_component_input"; taskId: string; input: ComponentInput }
+  | { type: "task_tool_view_request"; taskId: string; view: ToolViewRequest }
+  | { type: "task_dequeue"; taskId: string; requestId: string }
   | { type: "task_abort"; taskId: string }
   | { type: "task_resume"; taskId: string; afterCursor: number }
   | { type: "task_status"; taskId: string };
@@ -195,6 +200,8 @@ export type WorkerFrame =
   | { type: "task_accepted"; taskId: string; status: TaskStatus }
   | { type: "task_input_accepted"; taskId: string; inputId: string }
   | { type: "task_event"; event: TaskEvent }
+  | { type: "task_component"; taskId: string; component: ComponentFrame }
+  | { type: "task_tool_view"; taskId: string; view: ToolPresentation }
   | { type: "task_result"; result: TaskResult }
   | { type: "task_state"; state: TaskSnapshot }
   | { type: "error"; requestType?: ClientFrame["type"]; error: ProtocolError };
@@ -207,6 +214,9 @@ const CLIENT_TYPES = new Set<ClientFrame["type"]>([
   "task_create",
   "task_input",
   "task_ui_response",
+  "task_component_input",
+  "task_tool_view_request",
+  "task_dequeue",
   "task_abort",
   "task_resume",
   "task_status",
@@ -217,6 +227,8 @@ const WORKER_TYPES = new Set<WorkerFrame["type"]>([
   "task_accepted",
   "task_input_accepted",
   "task_event",
+  "task_component",
+  "task_tool_view",
   "task_result",
   "task_state",
   "error",
@@ -265,6 +277,7 @@ export function parseWorkerIdentity(value: unknown): WorkerIdentity {
   if (!requireCounter(capabilities.maxArtifactBytes, "maxArtifactBytes") || typeof capabilities.dockerAvailable !== "boolean") throw new Error("invalid Worker capabilities");
   if (capabilities.dockerNetwork !== undefined && capabilities.dockerNetwork !== "none" && capabilities.dockerNetwork !== "bridge") throw new Error("invalid Docker network");
   if (capabilities.cloudVersion !== undefined) requireString(capabilities.cloudVersion, "cloudVersion");
+  if (capabilities.taskUiVersion !== undefined && (!Number.isSafeInteger(capabilities.taskUiVersion) || Number(capabilities.taskUiVersion) < 1)) throw new Error("invalid Worker task UI version");
   if (capabilities.storageHealthy !== undefined && typeof capabilities.storageHealthy !== "boolean") throw new Error("invalid Worker storage health");
   if (capabilities.storageError !== undefined && (typeof capabilities.storageError !== "string" || !/^[A-Z_]{1,32}$/.test(capabilities.storageError))) throw new Error("invalid Worker storage diagnosis");
   // SAFETY: all identity fields consumed by the client have been validated; archive versions are negotiated separately.
@@ -407,7 +420,7 @@ export function parseTaskUiRequest(value: unknown): TaskUiRequest {
   return request as unknown as TaskUiRequest;
 }
 
-function parseTaskUiResponse(value: unknown): TaskUiResponse {
+export function parseTaskUiResponse(value: unknown): TaskUiResponse {
   const response = requireObject(value, "UI response");
   validateIdentifier(response.taskId);
   validateIdentifier(response.id);
@@ -467,6 +480,21 @@ export function parseFrame(json: string): ProtocolFrame {
         type: "task_ui_response",
         response: parseTaskUiResponse(frame.response),
       };
+    case "task_dequeue":
+      validateIdentifier(frame.taskId); validateIdentifier(frame.requestId);
+      return { type: "task_dequeue", taskId: frame.taskId as string, requestId: frame.requestId as string };
+    case "task_tool_view_request":
+      validateIdentifier(frame.taskId);
+      return { type: "task_tool_view_request", taskId: frame.taskId as string, view: parseToolViewRequest(frame.view) };
+    case "task_tool_view":
+      validateIdentifier(frame.taskId);
+      return { type: "task_tool_view", taskId: frame.taskId as string, view: parseToolPresentation(frame.view) };
+    case "task_component_input":
+      validateIdentifier(frame.taskId);
+      return { type: "task_component_input", taskId: frame.taskId as string, input: parseComponentInput(frame.input) };
+    case "task_component":
+      validateIdentifier(frame.taskId);
+      return { type: "task_component", taskId: frame.taskId as string, component: parseComponentFrame(frame.component) };
     case "task_abort":
       return {
         type: "task_abort",

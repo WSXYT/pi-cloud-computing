@@ -8,22 +8,21 @@ Node.js 24 TypeScript ESM Pi extension and native Windows/macOS/Linux Worker. So
 - Install: `npm ci`
 - Validate: `npm run check && npm test`
 - Package/install smoke: `npm run pack:smoke`
-- Published-package smoke: set `PI_CLOUD_SMOKE_PACKAGE=pi-cloud-computing@<version>` for the same command.
+- Published-package smoke: set `PI_CLOUD_SMOKE_PACKAGE=pi-cloud-computing@<version>`.
 - Production audit: `npm audit --omit=dev`
 
 ## Safety and Recovery
-- Pin certificates before credentials/uploads. Keep protocol failures structured; never expose raw exceptions or credentials.
-- Distinguish transfer phases and storage failures. Check Worker compatibility/health before uploads; never recreate a missing task automatically.
-- Credentials need explicit per-task consent, encrypted/revocable storage and runtime cleanup; no-auth endpoints require explicit confirmation.
-- Preserve journal finalization flags: abort acknowledgement does not mean credential cleanup finished.
-- Windows private writes fail closed on ACL failure; never recursively strip child-file inheritance.
-- Preserve source, state, sessions and artifacts; never destructive-reset checkouts. Uninstall preserves configuration, credentials and task data.
-- Validate cached results before saving. Preview before consent; apply after baseline checks. Local timeouts never determine remote outcomes.
+- Pin certificates and check Worker health/capabilities before uploads. Keep errors structured; never expose credentials or raw exceptions.
+- Never recreate missing tasks automatically. Local timeouts do not establish remote outcomes.
+- Preserve abort finalization until process/credential cleanup finishes.
+- Default credential selection is not consent: require explicit per-task authorization, encrypted/revocable storage and cleanup. No-auth endpoints require confirmation.
+- Windows private writes fail closed on ACL errors; never recursively strip child inheritance.
+- Preserve source, state, sessions and artifacts. Uninstall preserves private data.
+- Validate cached results, preview before consent, and apply only after baseline checks.
 
 ## UX and Acceptance
-- Preserve local Enter, explicit cloud submit/append, drafts and native editor ownership. Stop remains usable while locked.
-- Test checkbox states, literal slash input, streamed/errors output, real cancellation/credential cleanup and local conversation afterward.
-- Require real PTY/ConPTY, installed-service execution on all three systems, cross-platform artifacts, package smoke and Linux Docker. Skips/mocks are not platform acceptance.
-- Service-install CI scripts are for disposable runners only. `ACCEPTANCE.md` records scope and limitations.
-- Require every CI job for the exact release commit; follow `RELEASING.md`.
+- Idle Enter stays local; running Enter steers cloud, native follow-up/dequeue bindings retain meaning. Preserve drafts, focus-aware Escape and usable stop.
+- Reuse native Pi components. Keep plugin code in the isolated SDK process; capability failures must be explicit, not silent text fallbacks. Pin SDK adapters.
+- Require real PTY/ConPTY, installed-service execution on three systems, cross-platform artifacts, package smoke and Linux Docker. Skips/mocks are not acceptance.
+- Service-install CI scripts are disposable-runner only. Record limits in `ACCEPTANCE.md`; require every CI job for the exact candidate per `RELEASING.md`.
 <!-- pi-agents-md:end -->

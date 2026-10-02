@@ -128,6 +128,7 @@ export function isTemporaryCloudEntry(entry: SessionEntry): boolean {
   return (
     (entry.type === "custom" || entry.type === "custom_message") &&
     (entry.customType === "pi-cloud-live" ||
+      entry.customType === "pi-cloud-native" ||
       entry.customType === "pi-cloud-task")
   );
 }

@@ -150,7 +150,7 @@ for (const history of [true, false]) {
           request.options.find((option) => option === "Merge remote conversation") ||
           request.options.find((option) => option.startsWith("Run this project in the cloud")) ||
           (!history && request.options.find((option) => option.startsWith("[x] Current conversation"))) ||
-          (!history && request.options.find((option) => option.startsWith("[ ] Pi provider credentials"))) ||
+          (history && request.options.find((option) => option.startsWith("[x] Pi provider credentials"))) ||
           request.options.find((option) => option.startsWith("Next: review")) ||
           request.options.find((option) => option === "Confirm: the selected model endpoint needs no authentication");
         assert.ok(option, JSON.stringify(request));
@@ -225,7 +225,7 @@ for (const history of [true, false]) {
     if (!history) assert.equal(submissionConfirmations, 2, "declining final consent must return to the draft, not upload or lose choices");
     assert.equal(task.runner, "host");
     assert.equal(task.artifacts.some((artifact) => artifact.kind === "session"), history);
-    assert.equal(task.secretIds.length, history ? 0 : 1, "credentials must require an explicit toggle and confirmation");
+    assert.equal(task.secretIds.length, history ? 0 : 1, "available provider credentials default selected but can be declined before final consent");
     assert.equal(unauthenticatedConsents > 0, history, "unchecked credentials require a separate explicit declaration of an unauthenticated model endpoint");
     assert.ok((await readFile(originalPath, "utf8")).includes(original.sessionId));
     await until(async () => !!(await loadClientState(statePath)).tasks?.find((item) => item.taskId === task.taskId)?.accepted, async () => JSON.stringify({
@@ -233,21 +233,22 @@ for (const history of [true, false]) {
       events: client.events.slice(-15), stderr: client.stderr, worker: record.events.slice(-5),
     }));
     assert.equal((await loadClientState(statePath)).tasks!.find((item) => item.taskId === task.taskId)!.sessionId, original.sessionId, "local and remote session associations must remain separate");
-    const beforeLockedInput = client.events.length;
-    await client.command({ type: "prompt", message: "ordinary input stays local" });
-    assert.equal(worker.tasks.get(task.taskId)!.inputs.length, 0, "locked input must not be forwarded to cloud");
-    assert.ok(!client.events.slice(beforeLockedInput).some((event) => event.type === "agent_start"), "locked input must not start a local turn");
+    const beforeCloudInput = client.events.length;
+    await client.command({ type: "prompt", message: "ordinary input appends to cloud" });
+    await until(() => worker.tasks.get(task.taskId)!.inputs.length === 1, "ordinary input was not appended to cloud");
+    assert.equal(worker.tasks.get(task.taskId)!.inputs[0]!.delivery, "steer");
+    assert.ok(!client.events.slice(beforeCloudInput).some((event) => event.type === "agent_start"), "cloud input must not start a local turn");
     await client.command({ type: "prompt", message: "/cloud-append" });
     await client.command({ type: "prompt", message: "/skill:example raw remote input" });
-    await until(() => worker.tasks.get(task.taskId)!.inputs.length === 1, "slash input was not forwarded");
-    assert.equal(worker.tasks.get(task.taskId)!.inputs[0]!.message, "/skill:example raw remote input");
+    await until(() => worker.tasks.get(task.taskId)!.inputs.length === 2, "slash input was not forwarded");
+    assert.equal(worker.tasks.get(task.taskId)!.inputs[1]!.message, "/skill:example raw remote input");
     assert.ok(!client.events.some((event) => event.type === "agent_start"), "no local model turn may run during cloud handoff");
 
     await client.command({ type: "prompt", message: "/cloud-reconnect" });
     await client.command({ type: "prompt", message: "/cloud-reconnect" });
     await client.command({ type: "prompt", message: "/cloud-append" });
     await client.command({ type: "prompt", message: "one input after replacing sockets" });
-    await until(() => worker.tasks.get(task.taskId)!.inputs.length === 2, "replacement socket lost input");
+    await until(() => worker.tasks.get(task.taskId)!.inputs.length === 3, "replacement socket lost input");
     await client.stop();
     worker.tasks.log(task.taskId, { rpc: { type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "offline reply\u001b]52;c;UNSAFE\u0007" }] } } });
     client = new NativePi(cwd, agentDir, answer, ["-c"]);
@@ -354,10 +355,19 @@ test(`real Worker Pi (${dockerIntegration ? "docker" : "host"}) restores a provi
   await writeFile(join(agentDir, "extensions", "synced.ts"), `
     import { Type } from "typebox";
     import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
+    import { Text } from "@earendil-works/pi-tui";
     import { readFile, writeFile } from "node:fs/promises";
     import { join } from "node:path";
     export default (pi) => pi.registerTool({
       name: "synced_write", label: "Synced write", description: "Verify the synchronized runtime", parameters: Type.Object({ text: Type.String() }),
+      renderCall(args, theme, context) {
+        context.state.marker = new Set(['shared-renderer-state']);
+        return new Text('REMOTE_CUSTOM_CALL', 0, 0);
+      },
+      renderResult(result, options, theme, context) {
+        if (!context.state.marker?.has('shared-renderer-state')) throw new Error('renderer state lost');
+        return new Text(options.expanded ? 'REMOTE_CUSTOM_EXPANDED' : 'REMOTE_CUSTOM_COLLAPSED', 0, 0);
+      },
       async execute(_id, params, _signal, _update, ctx) {
         const skill = await readFile(join(process.env.PI_CODING_AGENT_DIR, "skills/synced/SKILL.md"), "utf8");
         if (!skill.includes("SYNCHRONIZED_SKILL")) throw new Error("skill was not synchronized");
@@ -398,6 +408,8 @@ test(`real Worker Pi (${dockerIntegration ? "docker" : "host"}) restores a provi
   const record = (await records())[0]!;
   assert.equal(record.status, "completed", JSON.stringify({ result: record.result, tail: record.events.slice(-10) }));
   assert.equal(requests.length, 2, JSON.stringify(record.events));
+  assert.ok(record.events.some(event => JSON.stringify(event.payload).includes("REMOTE_CUSTOM_EXPANDED")), "custom tool renderer must execute in the real task process");
+  assert.ok(record.events.some(event => JSON.stringify(event.payload).includes("REMOTE_CUSTOM_COLLAPSED")));
   assert.ok(requests.every((request) => request.authorization === "Bearer CLOUD_TEST_KEY"));
   assert.ok(requests[0]!.body.includes("synced_write"));
   assert.ok(client.events.some((event) => event.type === "extension_ui_request" && event.method === "confirm" && event.title.includes("Remote authorization test")));
@@ -418,6 +430,14 @@ test(`real Worker Pi (${dockerIntegration ? "docker" : "host"}) restores a provi
   await until(() => client.events.some(event => event.type === "extension_ui_request" && event.method === "setWidget" && event.widgetLines?.some(line => line.includes("WAITING_FOR_ABORT"))), "running cloud text was not streamed before completion");
   const cancelling = (await records()).find(item => item.task.taskId !== record.task.taskId)!;
   assert.ok(cancelling, "second explicit submission must exist");
+  await client.command({ type: "prompt", message: "QUEUED_FOLLOWUP_FIXTURE" }); // Ordinary input steers; configured follow-up is covered through the real terminal.
+  await until(async () => (await records()).find(item => item.task.taskId === cancelling.task.taskId)!.events.some(event => {
+    const rpc = event.payload.rpc as { type?: string; steering?: string[] } | undefined;
+    return rpc?.type === "queue_update" && !!rpc.steering?.includes("QUEUED_FOLLOWUP_FIXTURE");
+  }), async () => JSON.stringify({ message: "native SDK follow-up queue was not observed", record: (await records()).find(item => item.task.taskId === cancelling.task.taskId), events: client.events.slice(-8) }));
+  await client.command({ type: "prompt", message: "/cloud-dequeue" });
+  await until(() => client.events.some(event => event.type === "extension_ui_request" && event.method === "set_editor_text" && event.text?.includes("QUEUED_FOLLOWUP_FIXTURE")), "remote dequeue did not restore the draft");
+  assert.equal(requests.length, 3, "dequeue must not execute the queued message or start a local model");
   t.diagnostic("stream received; requesting real process stop");
   await client.command({ type: "prompt", message: "/cloud-abort" });
   t.diagnostic("stop command returned");

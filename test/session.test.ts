@@ -55,7 +55,8 @@ test("exports only durable cloud session entries", () => {
     entry("e1", null),
     entry("live", "e1", "pi-cloud-live"),
     entry("task", "live", "pi-cloud-task"),
-    entry("e2", "task"),
+    entry("native", "task", "pi-cloud-native"),
+    entry("e2", "native"),
   ];
   const archive = exportSessionBranch({
     getHeader: () => header("s1"),
