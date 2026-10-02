@@ -451,5 +451,6 @@ test(`real Worker Pi (${dockerIntegration ? "docker" : "host"}) restores a provi
   await client.command({ type: "prompt", message: "continue locally after cancelling cloud" });
   await until(() => client.events.some(event => event.type === "message_end" && JSON.stringify(event).includes("LOCAL_REPLY_AFTER_CANCEL")), () => Promise.resolve(JSON.stringify({ message: "cloud cancellation broke normal local conversation", events: client.events.slice(-15), stderr: client.stderr })) );
   assert.equal((await records()).length, 2, "local continuation must not submit another cloud task");
+  assert.ok(!requests.at(-1)!.body.includes("WAITING_FOR_ABORT"), "unmerged cloud display output must not enter the following local provider request");
   assert.ok(!JSON.stringify(client.events).includes("CLOUD_TEST_KEY"), "credentials must never be rendered or logged by the client");
 });

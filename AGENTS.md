@@ -22,6 +22,7 @@ Node.js 24 TypeScript ESM Pi extension and native Windows/macOS/Linux Worker. So
 
 ## UX and Acceptance
 - Idle Enter stays local; running Enter steers cloud, native follow-up/dequeue bindings retain meaning. Preserve drafts, focus-aware Escape and usable stop.
+- Keep cloud display cards out of local model context; triggerTurn:false is insufficient.
 - Reuse native Pi components. Keep plugin code in the isolated SDK process; capability failures must be explicit, not silent text fallbacks. Pin SDK adapters.
 - Require real PTY/ConPTY, installed-service execution on three systems, cross-platform artifacts, package smoke and Linux Docker. Skips/mocks are not acceptance.
 - Service-install CI scripts are disposable-runner only. Record limits in `ACCEPTANCE.md`; require every CI job for the exact candidate per `RELEASING.md`.

@@ -762,7 +762,7 @@ export default async function piCloudExtension(pi: ExtensionAPI): Promise<void> 
       setCloudStatus(ctx, tr("cloud.scanStatus"));
       const workspace = await createWorkspaceArchive(ctx.cwd);
       controller.signal.throwIfAborted();
-      const environment = await scanEnvironment({ agentDir: getAgentDir(), cwd: ctx.cwd, piVersion: VERSION, nodeVersion: process.version, platform: process.platform });
+      const environment = await scanEnvironment({ agentDir: getAgentDir(), cwd: ctx.cwd, piVersion: VERSION, nodeVersion: process.version, platform: process.platform, credentialProvider: ctx.model?.provider });
       controller.signal.throwIfAborted();
       environment.archive.manifest.secretVersions = [];
       const manifest = environment.archive.manifest;
@@ -1265,6 +1265,11 @@ export default async function piCloudExtension(pi: ExtensionAPI): Promise<void> 
     } finally { wizardOpen = false; }
   });
 
+  // Display-only cards must never become user messages in a later local model turn.
+  // triggerTurn:false prevents immediate execution, not inclusion in Pi's context.
+  pi.on("context", (event) => ({ messages: event.messages.filter(message =>
+    message.role !== "custom" || !["pi-cloud-live", "pi-cloud-native", "pi-cloud-task"].includes(message.customType)
+  ) }));
   pi.on("session_start", async (_event, ctx) => {
     shuttingDown = false;
     installEditor(ctx);

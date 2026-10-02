@@ -1,6 +1,6 @@
 # Native cloud interaction: investigation and acceptance map
 
-Status: implementation and code-candidate acceptance complete at `3531bd1` (seven green CI jobs, run 36998291775). Final documentation commit must pass its own CI. No deployment or publication is authorized.
+Status: independent completion audit rejected e67012f despite green CI. Corrections now cover display-only context filtering, standard environment credentials, and a real SDK/PTY Escape-to-local-reply loop in both modes (local 143/143). Final exact-commit CI and re-audit remain required. No deployment or publication is authorized.
 Goal: `muqftjld-loipjn`. This document records implementation evidence, not a change to the confirmed goal.
 
 ## New interaction contract

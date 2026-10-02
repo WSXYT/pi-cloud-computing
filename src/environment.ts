@@ -15,6 +15,7 @@ const RESOURCE_DIRS = [
 type ResourceKind = (typeof RESOURCE_DIRS)[number][0];
 
 export interface EnvironmentScanOptions {
+  credentialProvider?: string | undefined;
   agentDir: string;
   cwd: string;
   piVersion: string;

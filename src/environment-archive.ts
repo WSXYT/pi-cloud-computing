@@ -26,6 +26,7 @@ import {
 } from "./environment.js";
 import { decodeBase64, safeFilePath, validateRelativePath } from "./paths.js";
 import type { EnvironmentManifest } from "./protocol.js";
+import { providerCredentialEnv } from "./client-credentials.js";
 
 export interface RuntimeFile {
   path: string;
@@ -141,7 +142,7 @@ export async function scanEnvironment(
   const agentDir = resolve(options.agentDir);
   const manifest = await buildEnvironmentManifest(options);
   const files = new Map<string, RuntimeFile>();
-  const credentials: RuntimeCredentials = { format: 1, files: [], env: {} };
+  const credentials: RuntimeCredentials = { format: 1, files: [], env: providerCredentialEnv(options.credentialProvider, process.env) };
   const secretFiles = new Map<string, RuntimeFile>();
   const installPaths = new Set<string>();
   let size = 0;

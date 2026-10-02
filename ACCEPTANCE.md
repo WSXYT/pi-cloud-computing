@@ -2,7 +2,16 @@
 
 A passing unit test, an installed service descriptor, or a skipped job is not platform acceptance. Require **all seven CI jobs for the exact candidate commit**: three native client/service jobs, three cross-platform artifact consumers, and Linux Docker. The current branch's [Actions runs](https://github.com/WSXYT/pi-cloud-computing/actions/workflows/ci.yml?query=branch%3Afeat%2Fnative-cloud-interaction) identify the immutable commit and logs. Do not use an older green run to approve newer code.
 
-## Native SDK interaction candidate / 原生交互候选（已验证，未部署）
+## Audit correction / 完成审核后的补验
+
+The independent completion audit rejected `e67012f` despite its seven green CI jobs: `triggerTurn: false` did not exclude custom display messages from later model context; standard provider environment credentials were missed; and the PTY tests lacked a single real-execution → Escape → cleanup → local-reply flow. These were actual gaps, not waived by the earlier CI passes.
+
+- The client context hook now removes only cloud display cards, retaining visible history and genuine merged messages. `client-context.test.ts` exercises Pi's actual `convertToLlm`; real provider-request assertions check that unmerged cloud content is absent.
+- The scanner collects portable standard environment credentials only for the selected provider into the private consent bundle, never the resource archive. API-key names follow pinned Pi 0.85.1; machine-local ADC files, AWS profiles and metadata URLs are not implicitly copied. Default selection still requires final per-task consent.
+- `client-execution-terminal.test.ts` runs both regular/fullscreen against a real SDK Worker and fixture HTTP model: real streaming, actual editor Escape, remote connection closure, finalization and credential-file deletion, then Enter and a real local model reply. It asserts no extra cloud task, unchanged local files and no remote-display contamination of the local request.
+- Local correction gate: **143/143**, zero failures/skips, check/build/package smoke passed and production audit zero. Exact-commit seven-job CI remains required; use the immutable SHA and Actions run above, not historical counts below.
+
+## Earlier native SDK candidate gates
 
 This candidate supersedes the former locked-running-editor contract. Code commit `3531bd1b37ea583fc867c0a3afbb855550f6b912` passed [all seven jobs in run 36998291775](https://github.com/WSXYT/pi-cloud-computing/actions/runs/36998291775): Windows **139/139**, Linux/macOS/Docker **138/138**, zero failures or skips. Each native job passed package smoke and installed-service execution; the production Docker runner and all nine cross-platform artifact combinations passed. Production dependency audit reports zero vulnerabilities. Documentation-only follow-up commits still require their own seven-job gate, identifiable in the Actions link above.
 
