@@ -50,13 +50,15 @@ export class CloudEditor extends CustomEditor {
     }
     if (state.append && this.cloudKeybindings.matches(data, "app.message.dequeue")) { this.dequeueCloud(); return; }
     const followUp = state.append && this.cloudKeybindings.matches(data, "app.message.followUp");
-    if (state.append && (followUp || this.cloudKeybindings.matches(data, "tui.input.submit")) && !this.isShowingAutocomplete() && /^[\/!]/.test(this.getExpandedText().trimStart())) {
-      const text = this.getExpandedText();
+    const draft = this.getExpandedText();
+    const management = /^\/cloud(?:-[a-z-]+)?(?:\s|$)/.test(draft.trimStart());
+    if (state.append && (followUp || this.cloudKeybindings.matches(data, "tui.input.submit")) && /^[\/!]/.test(draft.trimStart()) && !management) {
+      const text = draft.replace(/^(\s*)\/\//, "$1/");
       this.setText("");
       this.submitLiteral(text, followUp ? "followUp" : "steer");
       return;
     }
-    if (followUp && this.getExpandedText().trim()) this.prepareFollowUp();
+    if (followUp && !management && draft.trim()) this.prepareFollowUp();
     if (state.locked && !state.append) {
       if (this.onExtensionShortcut?.(data)) return;
       if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl("c")) || matchesKey(data, Key.ctrl("d"))) super.handleInput(data);

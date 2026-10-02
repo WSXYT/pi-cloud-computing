@@ -75,7 +75,9 @@ export default async function piCloudExtension(pi: ExtensionAPI): Promise<void> 
   let locale = detectLocale(state.locale);
   const shortcut = state.shortcut ?? "f6";
   const shortcutLabel = shortcut === "disabled" ? "/cloud" : shortcut.toUpperCase();
-  const tr = (key: MessageKey, params: Record<string, string | number> = {}) => translate(locale, key, { shortcut: shortcutLabel, ...params });
+  let interruptKey = "Esc";
+  let clearKey = "Ctrl+C";
+  const tr = (key: MessageKey, params: Record<string, string | number> = {}) => translate(locale, key, { shortcut: shortcutLabel, interrupt: interruptKey, clear: clearKey, ...params });
   const detail = (error: unknown) => formatCloudError(error, locale);
   let abortWaitTimer: ReturnType<typeof setTimeout> | undefined;
   let active: ActiveTask | undefined;
@@ -111,7 +113,6 @@ export default async function piCloudExtension(pi: ExtensionAPI): Promise<void> 
     return view;
   };
   let followUpTask: ActiveTask | undefined;
-  let interruptKey = "Esc";
   const editorState: CloudEditorState = { locked: false, append: false, status: undefined };
   const setCloudStatus = (ctx: ExtensionContext, text: string | undefined): void => {
     if (text && editorState.locked && !editorState.append) text = `${tr(active?.state.pendingAbort ? "cloud.releaseHint" : submitting && !active?.state.readyToSubmit ? "cloud.cancelHint" : "cloud.stopHint", { interrupt: interruptKey })} · ${text}`;
@@ -126,7 +127,8 @@ export default async function piCloudExtension(pi: ExtensionAPI): Promise<void> 
     hideCloudThinking = SettingsManager.create(ctx.cwd, getAgentDir()).getHideThinkingBlock();
     ownEditor = (tui, theme, keybindings) => {
       transcriptTui = tui;
-      interruptKey = keybindings.getKeys("app.interrupt").map(key => key === "escape" ? "Esc" : key).join("/");
+      interruptKey = keybindings.getKeys("app.interrupt").map(key => key === "escape" ? "Esc" : key).join("/") || "/cloud-abort";
+      clearKey = keybindings.getKeys("app.clear").join("/");
       return new CloudEditor(tui, theme, keybindings, () => ({ ...editorState, busy: !!active || submitting, append: !!active && !active.state.pendingAbort, locked: submitting && !active?.state.readyToSubmit }),
       (text) => editorContext!.ui.theme.fg("accent", text), () => {
         if (!active || !editorContext) return;
@@ -211,17 +213,19 @@ export default async function piCloudExtension(pi: ExtensionAPI): Promise<void> 
   };
   const statusText = (task: CloudTaskState) => task.outcomeUnknown ? tr("cloud.outcomeUnknown") : task.finalizing ? tr("cloud.stopping") : tr(`cloud.task.${task.status}`, { taskId: task.taskId, cursor: task.cursor });
   const showTask = (task: ActiveTask, ctx: ExtensionContext): void => {
-    const info = statusText(task.state);
+    const connected = task.accepted && task.socket?.readyState === 1;
+    const info = connected ? statusText(task.state) : tr("cloud.disconnectedRunning");
     const queue = parseCloudQueue(task.state.cloudQueue);
-    if (ctx.mode === "tui" && queue && (queue.steering.length || queue.followUp.length)) {
-      ctx.ui.setWidget("pi-cloud-queue", (_tui, theme) => cloudQueueComponent(queue, text => theme.fg("dim", text), {
+    const unsent = (task.state.pendingInputs ?? []).map(input => input.message || `[${input.images?.length ?? 0} images]`);
+    if (ctx.mode === "tui" && (unsent.length || (queue && (queue.steering.length || queue.followUp.length)))) {
+      ctx.ui.setWidget("pi-cloud-queue", (_tui, theme) => cloudQueueComponent(queue ?? { steering: [], followUp: [] }, text => theme.fg("dim", text), {
         steer: tr("cloud.queueSteer"), followUp: tr("cloud.queueFollowUp"),
-        ...(task.socket?.readyState !== 1 ? { disconnected: tr("cloud.queueStale") } : {}),
-      }));
+        ...(!connected ? { disconnected: tr("cloud.queueStale") } : {}),
+      }, unsent, tr("cloud.unsentDescription")));
     } else ctx.ui.setWidget("pi-cloud-queue", undefined);
     editorState.locked = true;
     editorState.append = task.followUp;
-    setCloudStatus(ctx, task.followUp ? tr("cloud.appendReady") : `${shortcutLabel} · ${info}`);
+    setCloudStatus(ctx, connected && task.followUp ? tr("cloud.appendReady") : `${shortcutLabel} · ${info}`);
     if (ctx.mode === "tui") {
       ctx.ui.setWidget("pi-cloud", undefined);
       if (!nativeCards.has(task.state.taskId)) {

@@ -10,11 +10,12 @@ export function parseCloudQueue(value: unknown): CloudQueue | undefined {
 }
 
 /** Same components as Pi's pending-message area; these are queues, not transcript/log rows. */
-export function cloudQueueComponent(queue: CloudQueue, dim: (text: string) => string, labels: { steer: string; followUp: string; disconnected?: string }): Container {
+export function cloudQueueComponent(queue: CloudQueue, dim: (text: string) => string, labels: { steer: string; followUp: string; disconnected?: string }, unsent: string[] = [], unsentLabel = "Not yet sent"): Container {
   const container = new Container();
-  if (!queue.steering.length && !queue.followUp.length) return container;
+  if (!queue.steering.length && !queue.followUp.length && !unsent.length) return container;
   container.addChild(new Spacer(1));
   if (labels.disconnected) container.addChild(new TruncatedText(dim(labels.disconnected), 1, 0));
+  for (const message of unsent) container.addChild(new TruncatedText(dim(`${unsentLabel}: ${safeDisplayText(message)}`), 1, 0));
   for (const message of queue.steering) container.addChild(new TruncatedText(dim(`${labels.steer}: ${safeDisplayText(message)}`), 1, 0));
   for (const message of queue.followUp) container.addChild(new TruncatedText(dim(`${labels.followUp}: ${safeDisplayText(message)}`), 1, 0));
   return container;

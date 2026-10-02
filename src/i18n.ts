@@ -152,7 +152,7 @@ const zhCN: Catalog = {
   "cloud.pluginTitle": "云端插件交互 · Ctrl+C 停止云端任务",
   "cloud.pluginWaiting": "正在等待云端组件…",
   "cloud.pluginRequiresTui": "此云端插件需要交互式 Pi 终端；当前界面不支持，未自动同意该操作。",
-  "cloud.stopHint": "{interrupt} 停止 · Ctrl+C 清空草稿",
+  "cloud.stopHint": "{interrupt} 停止 · {clear} 清空草稿",
   "cloud.cancelHint": "{interrupt} 取消准备/上传",
   "cloud.releaseHint": "停止待确认 · 再按 {interrupt} 返回本地",
   "cloud.releasedUnconfirmed": "已结束本地等待，未确认云端已停止。输入区已释放；通过 /cloud-reconnect 查询原任务，不要直接重跑。",
@@ -210,9 +210,9 @@ const zhCN: Catalog = {
   "cloud.resultActions":
     "通过 /cloud 查看并接收结果；也可稍后处理，继续本地输入。",
   "cloud.restored": "已恢复云端任务 {taskId} 的连接",
-  "cloud.liveHelp": "运行中可编辑，Enter 追加到云端；Esc 停止，{shortcut} 打开任务操作",
-  "cloud.busyInput": "Enter 追加到云端 · Esc 停止 · {shortcut} 更多操作",
-  "cloud.appendReady": "Enter 追加到当前云端任务 · Esc 停止",
+  "cloud.liveHelp": "运行中可编辑，Enter 追加到云端；{interrupt} 停止，{shortcut} 打开任务操作",
+  "cloud.busyInput": "Enter 追加到云端 · {interrupt} 停止 · {shortcut} 更多操作",
+  "cloud.appendReady": "Enter 追加到当前云端任务 · {interrupt} 停止",
   "cloud.appendChoice": "追加指令",
   "cloud.cancelDescription": "取消当前准备或上传，恢复原输入",
   "cloud.resultCached": "云端结果副本已保存到本机；尚未应用文件或切换对话，可通过 /cloud 稍后接收。",
@@ -296,7 +296,7 @@ const zhCN: Catalog = {
   "cloud.defaultPrompt": "继续当前任务",
   "cloud.applyDescription": "检查并安全应用云端 Git 结果",
   "cloud.helpText":
-    "1. 在 Windows、macOS 或 Linux 服务器安装原生 Worker，再在本机运行其提供的配对安装命令。\n2. 本地输入按 {shortcut} 明确提交到云端；空闲时 Enter 仍是本地对话。\n3. 运行中继续编辑，Enter 追加到云端，Esc 停止；插件交互拥有焦点时 Ctrl+C 停止任务。\n4. 完成后用 /cloud-receive 预览并接收文件和对话，也可先继续本地对话。\n5. 检测到当前 Provider 凭据时默认勾选，但上传或复用都必须经本次最终确认。未配置时先用 /login 或配置模型鉴权；只有明确免鉴权的端点才可无凭据运行。",
+    "1. 在 Windows、macOS 或 Linux 服务器安装原生 Worker，再在本机运行其提供的配对安装命令。\n2. 本地输入按 {shortcut} 明确提交到云端；空闲时 Enter 仍是本地对话。\n3. 运行中继续编辑，Enter 追加到云端，{interrupt} 停止；插件交互拥有焦点时 Ctrl+C 停止任务。\n4. 完成后用 /cloud-receive 预览并接收文件和对话，也可先继续本地对话。\n5. 检测到当前 Provider 凭据时默认勾选，但上传或复用都必须经本次最终确认。未配置时先用 /login 或配置模型鉴权；只有明确免鉴权的端点才可无凭据运行。",
   "cloud.credentialsLabel": "Pi Provider 凭据",
   "cloud.credentialsDescription":
     "检测到当前 Provider 凭据时默认勾选，最终确认才授权本任务。此包包含 auth.json、配置密钥及引用的环境变量，可能含其他 Provider 凭据；经固定证书 TLS 传输、加密保存，可撤销。OAuth 并发刷新可能要求重新登录。",
@@ -393,7 +393,7 @@ const en: Catalog = {
   "cloud.pluginTitle": "Cloud plugin · Ctrl+C stops the cloud task",
   "cloud.pluginWaiting": "Waiting for the remote component…",
   "cloud.pluginRequiresTui": "This cloud plugin needs an interactive Pi terminal. This interface cannot display it; the operation was not approved.",
-  "cloud.stopHint": "{interrupt} stop · Ctrl+C clear draft",
+  "cloud.stopHint": "{interrupt} stop · {clear} clear draft",
   "cloud.cancelHint": "{interrupt} cancel preparation/upload",
   "cloud.releaseHint": "Stop unconfirmed · {interrupt} again for local input",
   "cloud.releasedUnconfirmed": "Local waiting ended; the remote stop is NOT confirmed. Input is released. Use /cloud-reconnect to query the original task, not a new run.",
@@ -453,9 +453,9 @@ const en: Catalog = {
   "cloud.resultActions":
     "Use /cloud to view and receive results, or leave them for later and continue locally",
   "cloud.restored": "WebSocket restored for remote task {taskId}",
-  "cloud.liveHelp": "Keep editing while running; Enter appends to the cloud, Esc stops, {shortcut} opens task actions",
-  "cloud.busyInput": "Enter appends to cloud · Esc stops · {shortcut} for more actions",
-  "cloud.appendReady": "Enter appends to the current cloud task · Esc stops",
+  "cloud.liveHelp": "Keep editing while running; Enter appends to the cloud, {interrupt} stops, {shortcut} opens task actions",
+  "cloud.busyInput": "Enter appends to cloud · {interrupt} stops · {shortcut} for more actions",
+  "cloud.appendReady": "Enter appends to the current cloud task · {interrupt} stops",
   "cloud.appendChoice": "Append instruction",
   "cloud.cancelDescription": "Cancel preparation or upload and restore the original draft",
   "cloud.resultCached": "Result copies saved locally; files and conversation are not yet applied. Use /cloud to receive them later.",
@@ -548,7 +548,7 @@ const en: Catalog = {
   "cloud.defaultPrompt": "Continue the current task",
   "cloud.applyDescription": "Review and safely apply a remote Git result",
   "cloud.helpText":
-    "1. Install a native Worker on Windows, macOS or Linux, then run its pairing/install command locally.\n2. Press {shortcut} to explicitly submit local input to cloud; idle Enter stays local.\n3. Keep editing while running: Enter appends, Esc stops. Ctrl+C stops the task while a plugin owns input focus.\n4. Use /cloud-receive to preview and receive files and conversation, or continue locally first.\n5. Detected current-provider credentials start selected, but uploading or reusing them requires final per-task confirmation. If missing, use /login or configure model authentication first; only explicitly unauthenticated endpoints may run without credentials.",
+    "1. Install a native Worker on Windows, macOS or Linux, then run its pairing/install command locally.\n2. Press {shortcut} to explicitly submit local input to cloud; idle Enter stays local.\n3. Keep editing while running: Enter appends, {interrupt} stops. Ctrl+C stops the task while a plugin owns input focus.\n4. Use /cloud-receive to preview and receive files and conversation, or continue locally first.\n5. Detected current-provider credentials start selected, but uploading or reusing them requires final per-task confirmation. If missing, use /login or configure model authentication first; only explicitly unauthenticated endpoints may run without credentials.",
   "cloud.credentialsLabel": "Pi provider credentials",
   "cloud.credentialsDescription":
     "Selected when current-provider credentials are detected; final confirmation authorizes this task. The bundle contains auth.json, config secrets and referenced environment variables, potentially including other providers. Pinned TLS, encrypted storage and revocation. Concurrent OAuth refresh may require signing in again.",

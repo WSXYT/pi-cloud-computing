@@ -41,7 +41,7 @@ test("cloud editor locks preparation only and keeps running drafts editable with
   editor.handleInput("running draft");
   assert.equal(editor.getText(), "running draft");
   state.append = true;
-  editor.setText("/cloud status");
+  editor.setText("//cloud status");
   editor.handleInput("\r");
   assert.deepEqual(literal, ["/cloud status"]);
   assert.deepEqual(native, []);

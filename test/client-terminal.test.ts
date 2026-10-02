@@ -9,7 +9,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { spawn } from "@lydell/node-pty";
-import { saveClientState } from "../src/client-state.js";
+import { loadClientState, saveClientState } from "../src/client-state.js";
 import { CloudConnection } from "../src/client-network.js";
 import { createPairing } from "../src/worker/pairing.js";
 import { loadWorkerState, saveWorkerState } from "../src/worker/state.js";
@@ -28,6 +28,12 @@ test(`real terminal (${mode}, ${outcome}) streams output, routes literal append 
   const agentDir = join(root, "agent");
   await mkdir(agentDir);
   const worker = await startWorkerServer({ dataDir: join(root, "worker"), publicIp: "127.0.0.1", port: 0, piVersion: "0.85.1", nodeVersion: process.version, gitVersion: "git", enableExecution: false });
+  let offline = false;
+  const sockets = new Set<{ destroy(): void }>();
+  worker.server.prependListener("upgrade", (_request, socket) => {
+    if (offline) { socket.destroy(); return; }
+    sockets.add(socket); socket.once("close", () => sockets.delete(socket));
+  });
   const state = await loadWorkerState(join(root, "worker"));
   const pairing = createPairing(state);
   await saveWorkerState(join(root, "worker"), state);
@@ -38,7 +44,8 @@ test(`real terminal (${mode}, ${outcome}) streams output, routes literal append 
   await writeFile(sessionFile, JSON.stringify({ type: "session", version: 3, id: sessionId, timestamp: new Date().toISOString(), cwd: root }) + "\n");
   const task: TaskSpec = { taskId: "terminal-task", projectId: root, prompt: "Terminal fixture", runner: "host", environment: { piVersion: "0.85.1", nodeVersion: "24", platform: process.platform, packages: [], resources: [], providers: [], secretVersions: [], warnings: [] }, git: { repositoryHash: "repo", head: "head", indexHash: "index", worktreeHash: "tree", includedPaths: [] }, session: { sessionId, baseLeafId: null, lastEntryId: null, entriesSha256: "empty" }, artifacts: [], secretIds: [] };
   worker.tasks.create(task);
-  await saveClientState({ locale: "en", activeWorkerId: paired.workerId, connections: [{ ...paired, baseUrl: worker.url, fingerprint: state.certificateFingerprint!, pairedAt: new Date().toISOString() }], tasks: [{ ...task.session, taskId: task.taskId, workerId: paired.workerId, baseUrl: worker.url, fingerprint: state.certificateFingerprint!, projectId: root, cursor: 0, status: "queued", prompt: task.prompt, updatedAt: new Date().toISOString(), accepted: true }] }, join(agentDir, "pi-cloud.json"));
+  await saveClientState({ locale: "en", ...(outcome === "abort" ? { shortcut: "disabled" as const } : {}), activeWorkerId: paired.workerId, connections: [{ ...paired, baseUrl: worker.url, fingerprint: state.certificateFingerprint!, pairedAt: new Date().toISOString() }], tasks: [{ ...task.session, taskId: task.taskId, workerId: paired.workerId, baseUrl: worker.url, fingerprint: state.certificateFingerprint!, projectId: root, cursor: 0, status: "queued", prompt: task.prompt, updatedAt: new Date().toISOString(), accepted: true }] }, join(agentDir, "pi-cloud.json"));
+  if (outcome === "abort") await writeFile(join(agentDir, "keybindings.json"), JSON.stringify({ "app.interrupt": "alt+x" }));
   await writeFile(join(agentDir, "settings.json"), JSON.stringify({ packages: [], theme: mode === "regular" ? "dark" : "light", defaultProvider: "fixture", defaultModel: "stub", defaultProjectTrust: "always", quietStartup: true, disableInstallTelemetry: true, analytics: { enabled: false } }));
   await writeFile(join(agentDir, "models.json"), JSON.stringify({ providers: { fixture: { api: "openai-completions", apiKey: "fixture", baseUrl: "http://127.0.0.1:1/v1", models: [{ id: "stub" }] } } }));
   const env = Object.fromEntries(Object.entries(process.env).filter(([key, value]) => value !== undefined && /^(path|pathext|systemroot|windir|comspec|temp|tmp|home|userprofile|appdata|localappdata|lang|lc_all)$/i.test(key))) as Record<string, string>;
@@ -52,13 +59,25 @@ test(`real terminal (${mode}, ${outcome}) streams output, routes literal append 
     return new Promise<void>(resolve => terminal.onExit(() => { exited = true; resolve(); }));
   };
   let exit = observe();
-  const until = async (predicate: () => boolean, budgetMs = 10_000) => {
-    for (let n = 0; n < budgetMs / 50; n++) { if (predicate()) return; if (exited) break; await delay(50); }
+  const until = async (predicate: () => boolean | Promise<boolean>, budgetMs = 10_000) => {
+    for (let n = 0; n < budgetMs / 50; n++) { if (await predicate()) return; if (exited) break; await delay(50); }
     assert.fail(`Terminal did not reach expected state:\n${output.slice(-12000)}`);
   };
   try {
     // Cold Pi/JIT startup competes with native Worker tests; UI action waits remain 10s.
-    await until(() => output.includes("Esc stop"), 30_000);
+    await until(() => output.includes(outcome === "abort" ? "alt+x stop" : "Esc stop"), 30_000);
+    // Management is identical with typed autocomplete and bracketed paste, including disabled F6.
+    for (const input of ["/cloud", "\x1b[200~/cloud\x1b[201~"]) {
+      output = ""; terminal.write(input); await delay(150); terminal.write("\r");
+      await until(() => output.includes("Return to the conversation and watch remote output"));
+      terminal.write("\x1b"); await delay(150);
+      assert.equal(worker.tasks.get(task.taskId)!.inputs.length, 0);
+    }
+    terminal.write("/cloud-append"); await delay(150); terminal.write("\r");
+    await until(() => output.includes(`Enter appends to the current cloud task · ${outcome === "abort" ? "alt+x" : "Esc"} stops`));
+    terminal.write("\x1b[200~/cloud-status\x1b[201~"); await delay(150); terminal.write("\r");
+    await until(() => output.includes("Client "));
+    assert.equal(worker.tasks.get(task.taskId)!.inputs.length, 0, "management commands must not become cloud input");
     worker.tasks.log(task.taskId, { rpc: { type: "message_update", message: { role: "assistant", content: [{ type: "thinking", thinking: "REMOTE_THINKING" }, { type: "text", text: "LIVE_DELTA_中文" }] }, assistantMessageEvent: { type: "text_delta", delta: "LIVE_DELTA_中文" } } });
     await until(() => output.includes("LIVE_DELTA_中文") && output.includes("REMOTE_THINKING"));
     output = "";
@@ -81,7 +100,7 @@ test(`real terminal (${mode}, ${outcome}) streams output, routes literal append 
     assert.equal(worker.tasks.exportState()[0]!.inputs[0]!.delivery, "steer");
     terminal.resize(45, 20);
     terminal.resize(100, 30);
-    terminal.write("\x1b[200~/cloud-abort 中文 literal\x1b[201~");
+    terminal.write("\x1b[200~//cloud-abort 中文 literal\x1b[201~");
     await delay(150);
     terminal.write("\r");
     await until(() => worker.tasks.exportState()[0]!.inputs.length === 2);
@@ -93,8 +112,22 @@ test(`real terminal (${mode}, ${outcome}) streams output, routes literal append 
     await until(() => worker.tasks.exportState()[0]!.inputs.length === 3);
     assert.equal(worker.tasks.exportState()[0]!.inputs[2]!.delivery, "followUp");
     assert.equal(worker.tasks.exportState()[0]!.inputs[2]!.message, "FOLLOW_UP_AFTER_TURN");
+    offline = true; for (const socket of sockets) socket.destroy();
+    output = "";
+    await until(() => output.includes("Connection lost; reconnecting"));
+    output = ""; terminal.write("OFFLINE_APPEND\r");
+    await until(() => output.includes("Inspect inputs saved locally but not yet acknowledged: OFFLINE_APPEND"));
+    terminal.resize(110, 35);
+    await until(() => output.includes("Connection lost; reconnecting"));
+    assert.ok(!output.includes("Running in the cloud"), "offline typing must not overwrite the disconnected status");
+    assert.equal(worker.tasks.get(task.taskId)!.inputs.length, 3);
+    await until(async () => (await loadClientState(join(agentDir, "pi-cloud.json"))).tasks?.[0]?.pendingInputs?.some(input => input.message === "OFFLINE_APPEND") === true);
+    offline = false; output = "";
+    await until(() => worker.tasks.get(task.taskId)!.inputs.length === 4);
+    await until(() => output.includes("Running in the cloud") || output.includes("Enter appends to the current cloud task"));
+    assert.equal(worker.tasks.get(task.taskId)!.inputs[3]!.message, "OFFLINE_APPEND");
     if (outcome === "abort") {
-      terminal.write("\x1b");
+      terminal.write("\x1bx");
       await until(() => worker.tasks.get(task.taskId)?.status === "aborted");
     } else worker.tasks.settle(task.taskId, "completed");
     await until(() => output.includes("input area is released"));
@@ -111,7 +144,10 @@ test(`real terminal (${mode}, ${outcome}) streams output, routes literal append 
     }
     terminal.write("LOCAL_DRAFT");
     await until(() => output.includes("LOCAL_DRAFT"));
-    terminal.write("\x1b[17~");
+    if (outcome === "abort") {
+      terminal.write("\x03"); await delay(150);
+      terminal.write("/cloud-submit LOCAL_DRAFT\r");
+    } else terminal.write("\x1b[17~");
     await until(() => output.includes("Git workspace"));
     terminal.write("\x1b");
     await delay(300);
