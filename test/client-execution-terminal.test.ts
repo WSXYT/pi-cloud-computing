@@ -110,6 +110,8 @@ for (const mode of ["regular", "fullscreen"] as const) test(`real ${mode} termin
     await until(() => output.includes("input area is released"));
     await until(() => output.includes("UNEXECUTED_FOLLOWUP") && output.includes("KEEP_LOCAL_DRAFT"));
     assert.equal((await loadClientState(join(agentDir, "pi-cloud.json"))).tasks?.[0]?.dequeuedDraft, "UNEXECUTED_FOLLOWUP", "stop must atomically recover the unexecuted queue without a prior dequeue");
+    // Native Pi treats two clears within 500ms as exit; fast Linux task shutdown can fit that window.
+    await delay(550);
     terminal.write("\x03"); await delay(150); // Clear the restored draft deliberately before the local turn.
     terminal.write("LOCAL_PROMPT_AFTER_ESCAPE\r");
     await until(() => output.includes("LOCAL_MODEL_REPLY_AFTER_ESCAPE"));
