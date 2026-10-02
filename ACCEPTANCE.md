@@ -13,6 +13,12 @@ The independent completion audit rejected `e67012f` despite its seven green CI j
 
 The next service diagnostic run (`37006873344`) located the macOS stall before plugin/model execution: SDK import took 20,537 ms under launchd `ProcessType=Background`. The service now uses `Interactive` for user-requested HTTPS work (Adaptive requires XPC transactions); the launchd manual documents Background CPU/I/O throttling. The configuration regression and actual installed-service tests cover this change without increasing timeouts. Full-suite file concurrency is capped at four to avoid starving PowerShell/PTY startup; no cases are skipped.
 
+## Second audit correction (candidate)
+
+The second audit rejected `373b451` despite seven green jobs. Editor interruption now uses `app.interrupt` rather than intercepting native Ctrl+C draft clearing. SDK stop atomically returns the pending queue before process termination; the existing kill deadline remains a fallback, and an unconfirmed queue copy stays recoverable without asserting it was unexecuted. Selecting unrelated credentials no longer bypasses the selected-model credential check and no-auth confirmation; the flow includes `/login`/configuration guidance.
+
+The real model PTY tests now execute a failing read tool, stream reasoning and text, toggle thinking/tool expansion, queue a follow-up, clear a draft without stopping, stop without prior dequeue, verify restored queue plus existing draft and runtime cleanup, then receive an uncontaminated local reply. Regular mode tests default Escape; fullscreen tests a rebound interrupt and confirms Escape no longer stops. These and the unrelated-provider consent case passed locally. A local parallel full run hit V8 native OOM; a subsequent serial run exceeded its command budget and is not a full-suite pass. Exact-candidate CI remains required.
+
 ## Earlier native SDK candidate gates
 
 This candidate supersedes the former locked-running-editor contract. Code commit `3531bd1b37ea583fc867c0a3afbb855550f6b912` passed [all seven jobs in run 36998291775](https://github.com/WSXYT/pi-cloud-computing/actions/runs/36998291775): Windows **139/139**, Linux/macOS/Docker **138/138**, zero failures or skips. Each native job passed package smoke and installed-service execution; the production Docker runner and all nine cross-platform artifact combinations passed. Production dependency audit reports zero vulnerabilities. Documentation-only follow-up commits still require their own seven-job gate, identifiable in the Actions link above.

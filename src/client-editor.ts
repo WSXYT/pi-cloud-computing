@@ -40,7 +40,7 @@ export class CloudEditor extends CustomEditor {
       this.cancelAppend();
       return;
     }
-    if ((state.busy ?? state.locked) && (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl("c")))) {
+    if ((state.busy ?? state.locked) && this.cloudKeybindings.matches(data, "app.interrupt")) {
       if (matchesKey(data, Key.escape) && this.isShowingAutocomplete()) {
         super.handleInput(data);
         return;

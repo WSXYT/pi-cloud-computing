@@ -111,9 +111,10 @@ export default async function piCloudExtension(pi: ExtensionAPI): Promise<void> 
     return view;
   };
   let followUpTask: ActiveTask | undefined;
+  let interruptKey = "Esc";
   const editorState: CloudEditorState = { locked: false, append: false, status: undefined };
   const setCloudStatus = (ctx: ExtensionContext, text: string | undefined): void => {
-    if (text && editorState.locked && !editorState.append) text = `${tr(active?.state.pendingAbort ? "cloud.releaseHint" : submitting && !active?.state.readyToSubmit ? "cloud.cancelHint" : "cloud.stopHint")} · ${text}`;
+    if (text && editorState.locked && !editorState.append) text = `${tr(active?.state.pendingAbort ? "cloud.releaseHint" : submitting && !active?.state.readyToSubmit ? "cloud.cancelHint" : "cloud.stopHint", { interrupt: interruptKey })} · ${text}`;
     editorState.status = text;
     if (ownEditor && ctx.mode === "tui" && ctx.ui.getEditorComponent?.() === ownEditor) ctx.ui.setStatus("pi-cloud", undefined);
     else ctx.ui.setStatus("pi-cloud", text);
@@ -125,6 +126,7 @@ export default async function piCloudExtension(pi: ExtensionAPI): Promise<void> 
     hideCloudThinking = SettingsManager.create(ctx.cwd, getAgentDir()).getHideThinkingBlock();
     ownEditor = (tui, theme, keybindings) => {
       transcriptTui = tui;
+      interruptKey = keybindings.getKeys("app.interrupt").map(key => key === "escape" ? "Esc" : key).join("/");
       return new CloudEditor(tui, theme, keybindings, () => ({ ...editorState, busy: !!active || submitting, append: !!active && !active.state.pendingAbort, locked: submitting && !active?.state.readyToSubmit }),
       (text) => editorContext!.ui.theme.fg("accent", text), () => {
         if (!active || !editorContext) return;
@@ -465,10 +467,12 @@ export default async function piCloudExtension(pi: ExtensionAPI): Promise<void> 
       if (rpc?.type === "cloud_queue_restored") {
         const restored = event.payload.rpc as { requestId?: unknown };
         const queue = parseCloudQueue(restored);
-        if (queue && restored.requestId === task.state.dequeueRequest?.id) {
+        const stoppedQueue = restored.requestId === `stop-${task.state.taskId}` && task.state.stopQueue !== undefined;
+        if (queue && (stoppedQueue || restored.requestId === task.state.dequeueRequest?.id)) {
           const text = [...queue.steering, ...queue.followUp].join("\n\n");
-          task.state.dequeuedDraft = text;
-          delete task.state.dequeueRequest;
+          if (text) task.state.dequeuedDraft = text;
+          if (stoppedQueue) delete task.state.stopQueue;
+          else delete task.state.dequeueRequest;
           if (text) ctx.ui.setEditorText([text, ctx.ui.getEditorText()].filter(value => value.trim()).join("\n\n"));
         }
       }
@@ -688,6 +692,7 @@ export default async function piCloudExtension(pi: ExtensionAPI): Promise<void> 
       return;
     }
     task.state.pendingAbort = true;
+    task.state.stopQueue = parseCloudQueue(task.state.cloudQueue) ?? { steering: [], followUp: [] };
     task.uiAbort.abort();
     task.components?.close();
     delete task.components;
@@ -787,7 +792,8 @@ export default async function piCloudExtension(pi: ExtensionAPI): Promise<void> 
         { id: "git", label: tr("cloud.gitLabel"), description: `${tr("cloud.gitDescription", { files: workspace.snapshot.files.length, size: formatSize(gitData.byteLength) })} · ${tr("cloud.reuseOnRetry")}`, selected: true, required: true },
         { id: "session", label: tr("cloud.sessionLabel"), description: `${tr("cloud.sessionDescription", { entries: local.entries.length, size: formatSize(sessionData.byteLength) })} · ${tr("cloud.reuseOnRetry")}`, selected: true },
       ];
-      if (hasCredentials) items.push({ id: "credentials", label: tr("cloud.credentialsLabel"), description: tr(reusable ? "cloud.credentialReuse" : "cloud.credentialsDescription"), selected: hasProviderCredentials(environment.credentials, ctx.model?.provider, ctx.model?.id) });
+      const usableCredentials = hasProviderCredentials(environment.credentials, ctx.model?.provider, ctx.model?.id);
+      if (hasCredentials) items.push({ id: "credentials", label: tr("cloud.credentialsLabel"), description: tr(reusable ? "cloud.credentialReuse" : "cloud.credentialsDescription"), selected: usableCredentials });
       setCloudStatus(ctx, undefined);
       const summary = [tr("cloud.projectPath", { path: safeDisplayText(await repositoryRoot(ctx.cwd)) }),
         `${selected.record.baseUrl} · ${runner} · HEAD ${workspace.snapshot.baseline.head.slice(0, 12)}`,
@@ -798,7 +804,7 @@ export default async function piCloudExtension(pi: ExtensionAPI): Promise<void> 
         if (!selection || shuttingDown) { if (!shuttingDown) ctx.ui.notify(tr("cloud.cancelled"), "info"); return; }
         chosen = selection;
         for (const item of items) item.selected = chosen.has(item.id);
-        if (!chosen.has("credentials")) {
+        if (!chosen.has("credentials") || !usableCredentials) {
           ctx.ui.notify(tr("cloud.authExplain"), "warning");
           const auth = await ctx.ui.select(tr("cloud.authChoice"), [tr("cloud.authBack"), tr("cloud.authNone"), tr("cloud.cancel")]);
           if (auth === tr("cloud.authBack")) continue;
@@ -1119,7 +1125,9 @@ export default async function piCloudExtension(pi: ExtensionAPI): Promise<void> 
     const task = active?.state ?? lastResult;
     const inputs = task?.pendingInputs ?? [];
     const pendingCopy = parseCloudQueue(task?.dequeueRequest?.backup);
+    const stopCopy = parseCloudQueue(task?.stopQueue ?? task?.cloudQueue);
     const recovery = [
+      ...(stopCopy && [...stopCopy.steering, ...stopCopy.followUp].length ? [`${tr("cloud.queueStale")}\n${[...stopCopy.steering, ...stopCopy.followUp].join("\n\n")}`] : []),
       ...(task?.dequeuedDraft ? [`${tr("cloud.queueDraftCopy")}\n${task.dequeuedDraft}`] : []),
       ...(pendingCopy ? [`${tr("cloud.queueEditWaiting")}\n${[...pendingCopy.steering, ...pendingCopy.followUp].join("\n\n")}`] : []),
     ];
@@ -1233,7 +1241,7 @@ export default async function piCloudExtension(pi: ExtensionAPI): Promise<void> 
           const more: CloudMenuItem[] = [];
           const add = (command: string, label: MessageKey, description: MessageKey = label) => more.push({ value: command, label: tr(label), description: tr(description) });
           if (active || lastResult) add("cloud-local", "cloud.localChoice", "cloud.localDescription");
-          if (task?.pendingInputs?.length || task?.dequeuedDraft || task?.dequeueRequest) add("cloud-inputs", "cloud.unsentDescription");
+          if (task?.pendingInputs?.length || task?.dequeuedDraft || task?.dequeueRequest || task?.stopQueue || task?.cloudQueue) add("cloud-inputs", "cloud.unsentDescription");
           if (active?.state.cloudQueue && !active.state.pendingAbort) add("cloud-dequeue", "cloud.queueDraftCopy");
           if (selected) {
             add("cloud-status", "cloud.statusChoice", "cloud.statusDescription");

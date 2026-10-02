@@ -97,8 +97,8 @@ async function until(predicate: () => boolean | Promise<boolean>, message: strin
   assert.fail(typeof message === "string" ? message : await message());
 }
 
-for (const history of [true, false]) {
-  test(`real Pi first-command submission, reconnect, output, apply and native merge (history=${history})`, { timeout: 90_000 }, async (t) => {
+for (const { history, credentialMismatch } of [{ history: true, credentialMismatch: false }, { history: false, credentialMismatch: false }, { history: false, credentialMismatch: true }]) {
+  test(credentialMismatch ? "real Pi requires explicit no-auth consent despite selecting unrelated provider credentials" : `real Pi first-command submission, reconnect, output, apply and native merge (history=${history})`, { timeout: 90_000 }, async (t) => {
     const root = await realpath(await mkdtemp(join(tmpdir(), "pi cloud native ")));
     const cwd = join(root, "repo");
     const agentDir = join(root, "agent");
@@ -112,8 +112,8 @@ for (const history of [true, false]) {
     await run("git", ["commit", "-qm", "initial"], { cwd });
     await saveClientState({ locale: "en", connections: [] }, statePath);
     await writeFile(join(agentDir, "settings.json"), JSON.stringify({ packages: [], defaultProvider: "test-only-provider", defaultModel: "stub", defaultProjectTrust: "never", quietStartup: true, disableInstallTelemetry: true, retry: { enabled: false }, analytics: { enabled: false } }));
-    await writeFile(join(agentDir, "models.json"), JSON.stringify({ providers: { "test-only-provider": { api: "openai-completions", apiKey: "FAKE_TEST_CREDENTIAL_NOT_A_REAL_KEY", baseUrl: "http://127.0.0.1:9/v1", models: [{ id: "stub" }] } } }));
-    await writeFile(join(agentDir, "auth.json"), JSON.stringify({ "test-only-provider": { type: "api_key", key: "FAKE_TEST_CREDENTIAL_NOT_A_REAL_KEY" } }));
+    await writeFile(join(agentDir, "models.json"), JSON.stringify({ providers: { "test-only-provider": { api: "openai-completions", ...(credentialMismatch ? {} : { apiKey: "FAKE_TEST_CREDENTIAL_NOT_A_REAL_KEY" }), baseUrl: "http://127.0.0.1:9/v1", models: [{ id: "stub" }] } } }));
+    await writeFile(join(agentDir, "auth.json"), JSON.stringify({ [credentialMismatch ? "unrelated-provider" : "test-only-provider"]: { type: "api_key", key: "FAKE_TEST_CREDENTIAL_NOT_A_REAL_KEY" } }));
     await saveWorkerConfig({ ...defaultWorkerConfig(workerDir), runner: "host", host: "127.0.0.1" });
     const worker = await startWorkerServer({ dataDir: workerDir, publicIp: "127.0.0.1", port: 0, piVersion: VERSION, nodeVersion: process.version, gitVersion: "git", enableExecution: false });
     const clients: NativePi[] = [];
@@ -127,6 +127,7 @@ for (const history of [true, false]) {
     let submissionConfirmations = 0;
     let receiveConfirmations = 0;
     let unauthenticatedConsents = 0;
+    let mismatchSelected = false;
     const answer = (request: RpcExtensionUIRequest): RpcExtensionUIResponse | undefined => {
       if (request.method === "input") return { type: "extension_ui_response", id: request.id,
         value: request.title.startsWith("1/3") ? "perform the remote task" : `/cloud-pair ${worker.url}/ ${pairing.fingerprint} ${pairing.code}` };
@@ -151,9 +152,11 @@ for (const history of [true, false]) {
           request.options.find((option) => option.startsWith("Run this project in the cloud")) ||
           (!history && request.options.find((option) => option.startsWith("[x] Current conversation"))) ||
           (history && request.options.find((option) => option.startsWith("[x] Pi provider credentials"))) ||
+          (credentialMismatch && !mismatchSelected && request.options.find(option => option.startsWith("[ ] Pi provider credentials"))) ||
           request.options.find((option) => option.startsWith("Next: review")) ||
           request.options.find((option) => option === "Confirm: the selected model endpoint needs no authentication");
         assert.ok(option, JSON.stringify(request));
+        if (credentialMismatch && option.startsWith("[ ] Pi provider credentials")) mismatchSelected = true;
         if (option === "Confirm: the selected model endpoint needs no authentication") unauthenticatedConsents++;
         return { type: "extension_ui_response", id: request.id, value: option };
       }
@@ -226,7 +229,12 @@ for (const history of [true, false]) {
     assert.equal(task.runner, "host");
     assert.equal(task.artifacts.some((artifact) => artifact.kind === "session"), history);
     assert.equal(task.secretIds.length, history ? 0 : 1, "available provider credentials default selected but can be declined before final consent");
-    assert.equal(unauthenticatedConsents > 0, history, "unchecked credentials require a separate explicit declaration of an unauthenticated model endpoint");
+    assert.equal(unauthenticatedConsents > 0, history || credentialMismatch, "unchecked or unusable credentials require explicit no-auth confirmation even when an unrelated bundle is selected");
+    if (credentialMismatch) {
+      assert.ok(mismatchSelected);
+      assert.ok(JSON.stringify(client.events).includes("/login"), "missing current-model credentials need actionable setup guidance");
+      return; // This case tests consent; the two credentialed cases below exercise local model continuation/merge.
+    }
     assert.ok((await readFile(originalPath, "utf8")).includes(original.sessionId));
     await until(async () => !!(await loadClientState(statePath)).tasks?.find((item) => item.taskId === task.taskId)?.accepted, async () => JSON.stringify({
       error: "submission acknowledgement not persisted", saved: (await loadClientState(statePath)).tasks?.map(({ taskId, accepted, status, cursor, error }) => ({ taskId, accepted, status, cursor, error })),

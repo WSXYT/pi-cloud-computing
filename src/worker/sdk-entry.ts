@@ -107,7 +107,7 @@ async function main(): Promise<void> {
     if (command.type === "extension_ui_response") { ui.answer(parseTaskUiResponse({ ...command, taskId: "sdk" })); return; }
     if (command.type === "abort") ui.close();
     const session = await ready;
-    if (command.type === "cloud_dequeue") {
+    if (command.type === "cloud_dequeue" || command.type === "cloud_stop") {
       validateIdentifier(command.requestId);
       const requestId = command.requestId as string;
       if (!dequeued.has(requestId)) {
@@ -115,6 +115,7 @@ async function main(): Promise<void> {
         await queueOperation(() => { if (!dequeued.has(requestId)) dequeued.set(requestId, session.clearQueue()); });
       }
       emit({ type: "cloud_queue_restored", requestId, ...dequeued.get(requestId) });
+      if (command.type === "cloud_stop") { ui.close(); await session.abort(); }
       return;
     }
     if (command.type === "clear_queue") { await queueOperation(() => session.clearQueue()); return; }

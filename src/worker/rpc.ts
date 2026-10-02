@@ -157,6 +157,8 @@ export class PiRpcExecutor {
       taskId,
       child,
       (rpc) => {
+        if (rpc.type === "cloud_queue_restored" && rpc.requestId === `stop-${taskId}` && running.closing)
+          this.terminate(child, "SIGTERM");
         if (rpc.type === "agent_start" || rpc.type === "response")
           clearTimeout(startup);
         if (
@@ -301,9 +303,8 @@ export class PiRpcExecutor {
     )
       return;
     running.closing = true;
-    this.write(running.child, { type: "clear_queue" });
-    this.write(running.child, { type: "abort" });
-    this.terminate(running.child, "SIGTERM");
+    // Retrieve queued text before process termination; an unresponsive host still hits the kill deadline.
+    this.write(running.child, { type: "cloud_stop", requestId: `stop-${taskId}` });
     const timer = setTimeout(
       () => this.terminate(running.child, "SIGKILL"),
       2_000,

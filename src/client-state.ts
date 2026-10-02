@@ -50,6 +50,7 @@ export interface CloudTaskState {
   cloudQueue?: CloudQueue;
   dequeueRequest?: { id: string; backup: CloudQueue };
   dequeuedDraft?: string;
+  stopQueue?: CloudQueue;
 }
 
 export const CLOUD_SHORTCUTS = ["f6", "f7", "f8", "f9", "f10", "f11", "f12", "disabled"] as const;

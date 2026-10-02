@@ -59,16 +59,16 @@ try {
 |---|---|
 | 空闲时 **Enter** | 正常交给本地 Pi |
 | 空闲时 **F6** | 将当前输入作为云端任务，打开上传范围与授权确认 |
-| 准备/上传时 **Esc / Ctrl+C / F6** | 取消实际请求，恢复原输入 |
+| 准备/上传时 **原生停止键（默认 Esc）/ F6** | 取消实际请求，恢复原输入 |
 | 云端运行时 **Enter** | 输入区保持可编辑，输入以 steer 语义追加给当前云端任务，不启动本地模型 |
-| 运行时 **Esc / Ctrl+C** | 请求云端停止；停止未确认时再按 Esc 可只结束本地等待 |
+| 运行时 **原生停止键（默认 Esc）** | 请求云端停止；停止未确认时再按 Esc 可只结束本地等待 |
 | 原生 follow-up 快捷键（例如 **Ctrl+Q**） | 排队等待云端当前轮次结束；遵循 `/hotkeys` 配置 |
 | 原生取回队列快捷键 / **`/cloud-dequeue`** | 确认从云端队列取回后恢复到编辑区，不自动重发；`/cloud-inputs` 保留恢复副本 |
 | 完成/失败后 | 释放输入区；普通 Enter 可继续本地，不必先处理结果 |
 
-云端回复、思考和工具调用使用 Pi 原生消息/工具组件，支持流式更新、Ctrl+T 思考切换和 Ctrl+O 工具展开；不自动触发本地模型。队列显示区区分 steer 和 follow-up。停止确认、尾部事件接收与运行时凭据清理完成后，输入恢复本地用途。
+云端回复、思考和工具调用使用 Pi 原生消息/工具组件，支持流式更新、Ctrl+T 思考切换和 Ctrl+O 工具展开；不自动触发本地模型。队列显示区区分 steer 和 follow-up。停止前会原子取回未执行的已确认队列，恢复到编辑区并保留现有草稿，不自动重发。断线或强制停止未收到取回确认时，`/cloud-inputs` 保留最后确认的队列副本；它不证明输入未执行。停止确认、尾部事件接收与运行时凭据清理完成后，输入恢复本地用途。
 
-运行中输入的 `/cloud-abort ...`、其他 `/...` 或 `!...` **按文字发送**，不会被误当成本地管理命令。F6 菜单也提供返回本地、停止、重连。远程工具需要确认时会显示原生 Pi 对话框。插件组件拥有焦点时，Escape 交给组件，Ctrl+C 停止云端任务；普通编辑区中 Escape 先关闭补全，再停止任务。
+运行中输入的 `/cloud-abort ...`、其他 `/...` 或 `!...` **按文字发送**，不会被误当成本地管理命令。F6 菜单也提供返回本地、停止、重连。远程工具需要确认时会显示原生 Pi 对话框。插件组件拥有焦点时，Escape 交给组件，Ctrl+C 停止云端任务；普通编辑区遵循 `app.interrupt` 配置（默认 Escape），先关闭补全，再停止任务；Ctrl+C 保留原生清空草稿功能，不停止云端。
 
 默认快捷键是 F6。若终端或其他扩展占用该键，先检查 `/hotkeys`，在 **`/cloud → 更多 → 云端快捷键`** 选择未使用的 F6–F12，或选择 `disabled` 禁用。保存后重新加载扩展，实际注册的按键同步显示在 `/hotkeys`。禁用时通过 `/cloud` 操作，普通文字仍被输入事件保护，不会自动发给模型。
 
@@ -93,7 +93,7 @@ try {
 
 ### 断线、取消与重试
 
-- **上传取消**：Esc、Ctrl+C、`/cloud-cancel` 或上传中的 F6；中断网络请求，恢复草稿。
+- **上传取消**：原生停止键（默认 Esc）、`/cloud-cancel` 或上传中的 F6；中断网络请求，恢复草稿。
 - **连接中断**：最多自动重连 5 次，单次等待不超过 10 秒，完整本地等待不超过 90 秒；随后释放输入。`/cloud-reconnect` 查询并恢复**原任务**。
 - **停止未确认**：`/cloud-abort` 请求远端停止；30 秒无确认便释放本地输入，**不会谎报任务已停止**。稍后重连查询。
 - **结果下载无进展**：30 秒结束等待，可再次获取。
@@ -164,14 +164,14 @@ Unverified/dirty source checkouts do not emit installer links; use a verified in
 
 - **Enter** stays local while idle. **F6** submits the editor draft to cloud preflight.
 - Review the Git workspace, runtime resources, conversation and optional credentials. Detected current-provider/model credentials start **selected**, but only final consent authorizes their upload or reuse. The bundle may include other providers’ auth.json/config secrets and referenced environment variables; inspect the scope.
-- During preparation/upload, **Esc, Ctrl+C or F6 cancels the request and restores the draft**.
-- During execution, **Esc/Ctrl+C requests a real remote stop**. While it remains unconfirmed, a second Esc only ends local waiting. Replies, thinking and tools use Pi’s native components with streaming, Ctrl+T and Ctrl+O, without starting a local model turn.
+- During preparation/upload, **the native interrupt key (default Esc) or F6 cancels the request and restores the draft**.
+- During execution, **the configured native interrupt key (default Esc) requests a real remote stop**. While it remains unconfirmed, a second Esc only ends local waiting. Replies, thinking and tools use Pi’s native components with streaming, Ctrl+T and Ctrl+O, without starting a local model turn.
 - During execution the editor stays editable. **Enter steers the cloud task**, while the configured native follow-up shortcut (such as Ctrl+Q) queues input for after the current turn. The configured dequeue shortcut or `/cloud-dequeue` retrieves queued text into the editor after acknowledgement; it never automatically resubmits it. `/cloud-inputs` retains recovery copies.
-- Slash-prefixed and bang-prefixed instructions while running are sent **literally**, not interpreted as local commands. Remote authorization uses native Pi dialogs. Escape first dismisses editor autocomplete; inside a plugin component it belongs to that component, while Ctrl+C remains the task-stop path.
+- Slash-prefixed and bang-prefixed instructions while running are sent **literally**, not interpreted as local commands. Remote authorization uses native Pi dialogs. The editor honors `app.interrupt` and first dismisses autocomplete; Ctrl+C retains native draft clearing without stopping cloud execution. Before stopping, the unexecuted queue is atomically retrieved into the editor alongside the existing draft, never resubmitted. If retrieval cannot be confirmed, `/cloud-inputs` keeps the last confirmed queue copy without claiming it was unexecuted. Inside a plugin component it belongs to that component, while Ctrl+C remains the task-stop path.
 - Completion/failure releases the editor; you may continue locally before receiving results.
 - Choose an unused F6–F12 through **`/cloud → More → Cloud shortcut`**. Check conflicts in `/hotkeys` first; saving reloads extensions and updates the actual registered shortcut. Choose `disabled` to use `/cloud` instead; ordinary text is still protected by the input hook.
 
-The Worker never inherits server/client logins or environment keys. Cached credentials still require authorization for each task. Leaving credentials unchecked requires a separate explicit declaration that the selected model endpoint needs no authentication; otherwise return to the checklist or cancel. Ordinary paid/login-based models generally cannot run without credentials.
+The Worker never inherits server/client logins or environment keys. Cached credentials still require authorization for each task. Leaving credentials unchecked, or selecting a bundle without usable credentials for the current model, requires a separate explicit declaration that the selected model endpoint needs no authentication; otherwise return to the checklist or cancel. Ordinary paid/login-based models generally cannot run without credentials.
 
 Uploads contain an independent task copy. Runtime synchronization includes plugins/packages, skills, prompts, themes and redacted provider configuration. Git history can still contain committed secrets even when credential sharing is disabled. Explicitly authorized credentials are TLS-pinned, encrypted at rest, temporarily materialized for execution and cleaned up afterward; revoke them through `/cloud`.
 
