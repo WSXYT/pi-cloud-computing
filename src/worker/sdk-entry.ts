@@ -25,6 +25,9 @@ async function piEntry(): Promise<string> {
 
 let startupPhase = "resolve_sdk";
 async function main(): Promise<void> {
+  const started = performance.now();
+  const stage = (name: string): void => emit({ type: "cloud_runtime_stage", stage: name, elapsedMs: Math.round(performance.now() - started) });
+  stage("resolve_sdk");
   const entry = pathToFileURL(await piEntry());
   // The pinned npm CLI lives in dist/bundle; its ESM-only exports cannot use require.resolve.
   const packageUrl = new URL("../../package.json", entry);
@@ -38,6 +41,7 @@ async function main(): Promise<void> {
   // Keep these two narrow adapters version-pinned; no renderer or Pi internals are patched.
   if (sdk.VERSION !== "0.85.1") throw new Error("CLOUD_SDK_VERSION_UNSUPPORTED");
   startupPhase = "load_ui_adapter";
+  stage(startupPhase);
   const themes = await import(new URL("./modes/interactive/theme/theme.js", sdkUrl).href) as {
     theme: Theme; initTheme(name?: string, watch?: boolean): void;
     getAvailableThemesWithPaths: ExtensionUIContext["getAllThemes"];
@@ -53,6 +57,7 @@ async function main(): Promise<void> {
   const settings = sdk.SettingsManager.create(process.cwd(), agentDir, { projectTrusted: args.includes("--approve") });
   themes.initTheme(settings.getTheme(), false);
   startupPhase = "create_ui";
+  stage(startupPhase);
   const ui = new SdkUiHost({
     theme: () => themes.theme, keys: bindings.KeybindingsManager.create(agentDir), truncate: toolkit.truncateToWidth, send: emit,
     getAllThemes: themes.getAvailableThemesWithPaths, getTheme: themes.getThemeByName,
@@ -72,6 +77,7 @@ async function main(): Promise<void> {
       catch { emit({ type: "extension_error", error: "CLOUD_TOOL_PRESENTATION_FAILED" }); }
     },
     onError: error => emit({ type: "extension_error", extensionPath: error.extensionPath, event: error.event, error: error.error }),
+    onStage: stage,
   });
   const dequeued = new Map<string, ReturnType<import("@earendil-works/pi-coding-agent").AgentSession["clearQueue"]>>();
   let promptPending = false, closing = false;

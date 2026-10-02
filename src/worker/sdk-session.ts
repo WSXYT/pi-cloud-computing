@@ -18,6 +18,7 @@ export interface SdkTaskSessionOptions {
   onEvent: AgentSessionEventListener;
   onError: NonNullable<Parameters<AgentSession["bindExtensions"]>[0]["onError"]>;
   extensionFactories?: InlineExtension[];
+  onStage?: (stage: "resources" | "session" | "extensions" | "ready") => void;
 }
 
 function thinkingLevel(value: string | undefined): ThinkingLevel | undefined {
@@ -30,6 +31,7 @@ function thinkingLevel(value: string | undefined): ThinkingLevel | undefined {
 /** Create the real Pi session; rendering and input delivery belong to the UI host. */
 export async function createSdkTaskSession(pi: PiSdk, options: SdkTaskSessionOptions): Promise<AgentSession> {
   const settingsManager = pi.SettingsManager.create(options.cwd, options.agentDir, { projectTrusted: options.projectTrusted });
+  options.onStage?.("resources");
   const services = await pi.createAgentSessionServices({
     cwd: options.cwd, agentDir: options.agentDir, settingsManager,
     modelRuntimeSignal: AbortSignal.timeout(15_000),
@@ -42,6 +44,7 @@ export async function createSdkTaskSession(pi: PiSdk, options: SdkTaskSessionOpt
   const selected = options.model ? services.modelRuntime.getModel(options.model.provider, options.model.id) : undefined;
   if (options.model && !selected) throw new Error("CLOUD_SELECTED_MODEL_UNAVAILABLE");
   const thinking = thinkingLevel(options.model?.thinkingLevel);
+  options.onStage?.("session");
   const { session } = await pi.createAgentSessionFromServices({
     services, sessionManager: pi.SessionManager.open(options.sessionPath),
     ...(selected ? { model: selected } : {}),
@@ -51,6 +54,7 @@ export async function createSdkTaskSession(pi: PiSdk, options: SdkTaskSessionOpt
   // A fixed task cannot silently switch sessions and evade its result/cleanup ownership.
   const denyReplacement = async (): Promise<never> => { throw new Error("CLOUD_TASK_SESSION_REPLACEMENT_UNSUPPORTED"); };
   try {
+    options.onStage?.("extensions");
     await session.bindExtensions({
       mode: "tui", uiContext: options.ui,
       commandContextActions: {
@@ -60,6 +64,7 @@ export async function createSdkTaskSession(pi: PiSdk, options: SdkTaskSessionOpt
       },
       onError: options.onError,
     });
+    options.onStage?.("ready");
     return session;
   } catch (error) {
     unsubscribe();
