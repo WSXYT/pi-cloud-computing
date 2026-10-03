@@ -136,7 +136,7 @@ export async function prepareTask(
     const bootstrapPath = join(runtimeDir, "bootstrap.mjs");
     await copyFile(new URL("./bootstrap.js", import.meta.url), bootstrapPath);
     await mkdir(join(runtimeDir, "worker"), { mode: 0o700 });
-    for (const file of ["component-protocol.js", "protocol.js", "paths.js", "version.js", "worker/sdk-entry.js", "worker/sdk-session.js", "worker/sdk-ui.js", "worker/sdk-dialogs.js", "worker/sdk-components.js", "worker/sdk-tool-presentations.js"]) {
+    for (const file of ["component-protocol.js", "protocol.js", "paths.js", "version.js", "worker/sdk-entry.js", "worker/sdk-compat.js", "worker/sdk-session.js", "worker/sdk-ui.js", "worker/sdk-dialogs.js", "worker/sdk-components.js", "worker/sdk-tool-presentations.js"]) {
       await copyFile(new URL(`../${file}`, import.meta.url), join(runtimeDir, file));
     }
     await writeFile(join(runtimeDir, "package.json"), JSON.stringify({ type: "module" }), { mode: 0o600, flag: "wx" });

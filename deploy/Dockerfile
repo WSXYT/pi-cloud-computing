@@ -7,7 +7,8 @@ RUN apt-get update \
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts
-RUN npm install --global @earendil-works/pi-coding-agent@0.85.1 --ignore-scripts \
+ARG PI_VERSION=1.0.0
+RUN npm install --global "@earendil-works/pi-coding-agent@${PI_VERSION}" --ignore-scripts \
     && mkdir -p node_modules/@earendil-works \
     && ln -s "$(npm root -g)/@earendil-works/pi-coding-agent" node_modules/@earendil-works/pi-coding-agent
 COPY dist ./dist

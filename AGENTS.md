@@ -12,7 +12,7 @@ Node.js 24 TypeScript ESM Pi extension and native Windows/macOS/Linux Worker. So
 - Production audit: `npm audit --omit=dev`
 
 ## Safety and Recovery
-- Pin certificates and check Worker health/capabilities before uploads. Keep errors structured; never expose credentials or raw exceptions.
+- Pin certificates and check Worker health/capabilities before uploads. Never expose credentials or raw exceptions.
 - Never recreate missing tasks automatically. Local timeouts do not establish remote outcomes.
 - Preserve abort finalization until process/credential cleanup finishes.
 - Default credential selection is not consent: require explicit per-task authorization, encrypted/revocable storage and cleanup. No-auth endpoints require confirmation.
@@ -21,9 +21,9 @@ Node.js 24 TypeScript ESM Pi extension and native Windows/macOS/Linux Worker. So
 - Validate cached results, preview before consent, and apply only after baseline checks.
 
 ## UX and Acceptance
-- Idle Enter stays local; running Enter steers cloud, native follow-up/dequeue bindings retain meaning. Preserve drafts, focus-aware Escape and usable stop.
+- Idle Enter stays local; running Enter steers cloud. Preserve native follow-up/dequeue, drafts, focus-aware Escape and usable stop.
 - Keep cloud display cards out of local model context; triggerTurn:false is insufficient.
-- Reuse native Pi components. Keep plugin code in the isolated SDK process; capability failures must be explicit, not silent text fallbacks. Pin SDK adapters.
-- Require real PTY/ConPTY, installed-service execution on three systems, cross-platform artifacts, package smoke and Linux Docker. Skips/mocks are not acceptance.
-- Service-install CI scripts are disposable-runner only. Record limits in `ACCEPTANCE.md`; require every CI job for the exact candidate per `RELEASING.md`.
+- Reuse native Pi components; keep plugin code isolated. Require Pi >=0.85.1 stable plus SDK/UI capability checks, not an exact-version whitelist. Test minimum and current Pi; fail unsupported capabilities explicitly.
+- Require real PTY/ConPTY, three-system installed-service execution, cross-platform artifacts, package smoke and Linux Docker. Skips/mocks are not acceptance.
+- Service-install CI scripts are disposable-runner only. Record limits in `ACCEPTANCE.md`; require every exact-candidate CI job per `RELEASING.md`.
 <!-- pi-agents-md:end -->

@@ -69,13 +69,19 @@ if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
 
 $pi = Get-Command pi -ErrorAction SilentlyContinue
 if (-not $pi) {
-  & $npm install --global '@earendil-works/pi-coding-agent@0.85.1' --ignore-scripts
+  & $npm install --global '@earendil-works/pi-coding-agent@latest' --ignore-scripts
   if ($LASTEXITCODE -ne 0) { throw 'Pi installation failed.' }
   Refresh-Path
   $pi = Get-Command pi -ErrorAction Stop
   if ($Language -eq 'zh-CN') { Write-Host "已安装 Pi：$($pi.Source)" } else { Write-Host "Installed Pi: $($pi.Source)" }
 } else {
   if ($Language -eq 'zh-CN') { Write-Host "检测到已有 Pi：$($pi.Source)，不重复安装。" } else { Write-Host "Found existing Pi at $($pi.Source); keeping it." }
+}
+
+# Keep newer installations; never downgrade an existing Pi.
+$piVersion = (& $pi.Source --version).Trim()
+if ($LASTEXITCODE -ne 0 -or $piVersion -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$' -or [version]($piVersion.Split('+')[0]) -lt [version]'0.85.1') {
+  throw 'Pi >=0.85.1 (stable) is required. Update Pi with npm install -g @earendil-works/pi-coding-agent@latest, then rerun.'
 }
 
 $source = if ($env:PI_CLOUD_SOURCE_DIR) { $env:PI_CLOUD_SOURCE_DIR } else { Join-Path $HOME '.pi-cloud\source' }

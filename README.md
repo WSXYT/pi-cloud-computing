@@ -11,7 +11,7 @@ Run your Pi session and Git workspace on a self-hosted Worker, then safely recei
 
 - **本地电脑**安装 Pi 插件，负责输入、授权和接收结果。
 - **服务器**安装 Worker，负责后台执行。Windows、macOS、Linux 都可原生运行，**不依赖 Docker**。
-- 需要 Node.js **24.x**、Git、Pi（当前验证 **0.85.1**）。项目必须是至少有一个 commit 的 Git 仓库。
+- 需要 Node.js **24.x**、Git、Pi **≥0.85.1 稳定版**（包括 **1.0.0**）。项目必须是至少有一个 commit 的 Git 仓库。
 - 服务器需有本地电脑可访问的 IP，并允许 TCP **9443**；不一定要公网 IP，局域网/VPN 也可以。
 - 原生 `host` 模式使用服务账号权限执行代码，不是安全沙箱。只连接自己信任的服务器；只同步信任的插件和依赖。
 
@@ -46,6 +46,8 @@ try {
 已有 Pi 窗口执行 `/reload`；新开 Pi 直接开始。若先安装了本地插件，进入 `/cloud`，粘贴服务器生成的完整 `/cloud-pair ...` 即可。安装器只提供“本地插件”或“服务器”两个角色，不提供混合安装选项。
 
 > `main` 链接安装主分支。开发/验收分支不等于已发布版本；生产更新前核对 [ACCEPTANCE.md](ACCEPTANCE.md) 和对应 commit 的 CI。
+
+安装器缺少 Pi 时安装 npm `latest` 稳定版；已有符合最低版本的 Pi 会保留，不降级。旧版或预发布版会提示手动更新，不擅自替换。开发依赖/默认 Docker 构建使用 **1.0.0** 以便复现，这不是运行时锁版；Docker 可用 `--build-arg PI_VERSION=<稳定版本>` 选择其他满足下限的版本。CI 同时覆盖最低版本与开发锁定版本。Pi 宿主依赖按官方插件规范保留 `peerDependencies: "*"`，版本下限由运行时检查执行。
 
 ### 原生交互的服务端兼容要求
 
@@ -87,7 +89,7 @@ try {
 
 ### 插件交互能力与边界
 
-任务在隔离 SDK 进程中加载插件。支持标准 confirm/select/input/editor、作用域内 custom 组件，以及云端执行的自定义工具渲染；闭包和回调结果留在云端，本地不执行服务器发送的代码，也不镜像远端整页终端。组件传输限制大小、速率和控制序列。当前适配严格固定 Pi **0.85.1**，两处主题/按键读取适配随版本验证；不支持的版本明确报错。
+任务在隔离 SDK 进程中加载插件。支持标准 confirm/select/input/editor、作用域内 custom 组件，以及云端执行的自定义工具渲染；闭包和回调结果留在云端，本地不执行服务器发送的代码，也不镜像远端整页终端。组件传输限制大小、速率和控制序列。采用最低版本策略：Pi **≥0.85.1 稳定版**，不设精确版本白名单。启动时检查实际 SDK 接口及两处主题/按键读取适配；新版本若缺少所需接口，会明确报能力错误，而不是因为版本号较新就拒绝。版本下限不是对所有未来版本或所有插件的兼容保证。
 
 这不是“所有插件均兼容”的承诺：全局终端钩子、替换本地编辑器、持久 header/footer/widget、会话替换、受控 overlay API 尚未支持，调用会明确失败，不会自动同意或伪装成文本日志。浏览器、本地端口、系统终端和设备能力不自动转发，也不执行远端提供的本地命令。离线自定义工具显示使用缓存宽度，完整渲染重排需要仍在运行的任务。
 
@@ -152,13 +154,15 @@ Docker 是 Linux 上的可选隔离模式，不是三平台原生 Worker 的前�
 
 ### Install the server, then connect your local computer
 
-There are two distinct roles: **local Pi extension** and **native Worker server**. Both support Windows, macOS and Linux. Native execution does **not require Docker**. Requirements: Node **24.x**, Git, Pi (verified with **0.85.1**), a repository with an initial commit, and a server IP reachable on TCP **9443** over your LAN, VPN or the Internet.
+There are two distinct roles: **local Pi extension** and **native Worker server**. Both support Windows, macOS and Linux. Native execution does **not require Docker**. Requirements: Node **24.x**, Git, Pi **≥0.85.1 stable** (including **1.0.0**), a repository with an initial commit, and a server IP reachable on TCP **9443** over your LAN, VPN or the Internet.
 
 On Linux/macOS, run the server command above with `--lang en` and your actual IP. On Windows, run the PowerShell example with `-Language en` from an administrator terminal. Only run installers from a source you trust.
 
 After dependency checks, service registration and a pinned local health check, the server prints **two ready-to-copy local commands**: POSIX and PowerShell. Run the appropriate command on your **local computer**. It detects/installs the extension and configures the connection automatically, pinned to the server's source commit. Pairing codes expire after ten minutes and are single-use. Do not publish the commands or codes.
 
 Unverified/dirty source checkouts do not emit installer links; use a verified installation and the complete `/cloud-pair ...` line instead. A client-first installation can paste that line through `/cloud`. Existing Pi windows need `/reload`. Main-branch installer links are not a claim that a development candidate has been released.
+
+If Pi is missing, installers use npm `latest` stable; existing installations meeting the minimum are kept, never downgraded. Older/prerelease versions require an explicit manual update. Development dependencies and default Docker builds use **1.0.0** for reproducibility, not as a runtime restriction; use `--build-arg PI_VERSION=<stable-version>` for another version meeting the minimum. CI covers both the minimum and the development version. Host-provided peers remain `"*"` as required by Pi package conventions; runtime checks enforce the minimum.
 
 ### Input and authorization
 
@@ -177,7 +181,7 @@ Uploads contain an independent task copy. Runtime synchronization includes plugi
 
 ### Plugin capabilities and limits
 
-Plugins load in an isolated SDK task process. Standard confirm/select/input/editor dialogs, scoped custom components and cloud-side custom tool renderers are supported. Closures/results stay cloud-side; the client never evaluates server-supplied code or mirrors a whole remote terminal. Frames have bounded size/rate and restricted terminal sequences. The adapter requires exactly Pi **0.85.1**, including two version-tested theme/keybinding reads; unsupported versions fail explicitly.
+Plugins load in an isolated SDK task process. Standard confirm/select/input/editor dialogs, scoped custom components and cloud-side custom tool renderers are supported. Closures/results stay cloud-side; the client never evaluates server-supplied code or mirrors a whole remote terminal. Frames have bounded size/rate and restricted terminal sequences. The minimum is Pi **0.85.1 stable**, without an exact-version whitelist. Startup checks the SDK APIs and the two narrow theme/keybinding adapters; missing APIs fail with an explicit capability error, rather than rejecting a newer version number. The version floor is not a guarantee for every future release or plugin.
 
 This is not universal plugin compatibility: global terminal hooks, local editor replacement, persistent header/footer/widget surfaces, session replacement and controlled overlay APIs currently fail explicitly. Browser/port/system-terminal/device access is not automatically forwarded, and remote-supplied local commands are never executed. Offline custom tool views use cached widths; complete reflow requires a live task.
 

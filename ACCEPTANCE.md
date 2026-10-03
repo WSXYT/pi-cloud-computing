@@ -1,6 +1,13 @@
 # Native cloud workflow acceptance / 验收记录
 
-A passing unit test, an installed service descriptor, or a skipped job is not platform acceptance. Require **all seven CI jobs for the exact candidate commit**: three native client/service jobs, three cross-platform artifact consumers, and Linux Docker. The current branch's [Actions runs](https://github.com/WSXYT/pi-cloud-computing/actions/workflows/ci.yml?query=branch%3Afeat%2Fnative-cloud-interaction) identify the immutable commit and logs. Do not use an older green run to approve newer code.
+A passing unit test, an installed service descriptor, or a skipped job is not platform acceptance. Require **all ten CI jobs for the exact candidate commit**: three current-Pi native client/service jobs, three minimum-Pi compatibility jobs, three cross-platform artifact consumers, and Linux Docker. The current branch's [Actions runs](https://github.com/WSXYT/pi-cloud-computing/actions/workflows/ci.yml?query=branch%3Afeat%2Fnative-cloud-interaction) identify the immutable commit and logs. Do not use an older green run to approve newer code.
+
+## Minimum Pi version compatibility / 最低版本兼容（本轮候选）
+
+- User-requested policy replaces the exact Pi 0.85.1 gate with **>=0.85.1 stable**, including 1.0.0; newer versions are checked for the required SDK/UI APIs, not rejected by a whitelist. Prereleases and malformed versions are not accepted automatically.
+- Local Windows Node 24 checks: **146/146 tests passed on Pi 1.0.0 and 146/146 on Pi 0.85.1**, zero failures/skips. Both run the real isolated SDK, PTY/ConPTY interaction, stop/cleanup, queue recovery and local continuation suites. Package smoke passed on both versions.
+- Installers retain an existing compatible Pi, reject old/prerelease versions with update guidance, and install npm `latest` only when missing. Default development/Docker build version is 1.0.0 for reproducibility, not a runtime maximum; Docker accepts `PI_VERSION` as a build argument.
+- CI adds a three-OS minimum-version lane alongside the current-version native-service/Docker/artifact gates. These changes need their own exact-candidate CI pass; earlier seven-job passes below do not cover this ten-job candidate. No production upgrade, restart, paid credentials or npm publication is part of this work.
 
 ## Audit correction / 完成审核后的补验
 

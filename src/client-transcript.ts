@@ -51,7 +51,8 @@ function assistant(value: unknown): Assistant | undefined {
     const block = record(item)!;
     if (block.type === "text") return { type: "text", text: safeDisplayText(String(block.text)) };
     if (block.type === "thinking") return { type: "thinking", thinking: safeDisplayText(String(block.thinking)) };
-    return { type: "toolCall", id: String(block.id), name: safeDisplayText(String(block.name)), arguments: record(displayValue(block.arguments)) ?? {} };
+    const args = displayValue(block.arguments);
+    return { type: "toolCall", id: String(block.id), name: safeDisplayText(String(block.name)), arguments: args !== null && typeof args === "object" && !Array.isArray(args) ? args : {} };
   });
   const reason = message.stopReason;
   // A component-only projection, never appended as model context or used for accounting.

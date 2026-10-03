@@ -11,12 +11,14 @@ import { parseTaskInput, parseTaskUiResponse } from "../protocol.js";
 import { createSdkTaskSession } from "./sdk-session.js";
 import { SdkUiHost } from "./sdk-ui.js";
 import { SdkToolPresentations } from "./sdk-tool-presentations.js";
+import { MIN_PI_VERSION, supportsPiVersion } from "../version.js";
+import { assertSdkCapabilities, assertUiAdapterCapabilities } from "./sdk-compat.js";
 
 type RuntimeEvent = Parameters<import("@earendil-works/pi-coding-agent").AgentSessionEventListener>[0] | Record<string, unknown>;
 const emit = (event: RuntimeEvent): void => { process.stdout.write(JSON.stringify(event) + "\n"); };
 async function piEntry(): Promise<string> {
   if (process.env.PI_CLOUD_PI_ENTRY) return process.env.PI_CLOUD_PI_ENTRY;
-  // The pinned Docker image supplies a normal npm symlink; never invoke a shell.
+  // The Docker image supplies a normal npm symlink; never invoke a shell.
   for (const directory of (process.env.PATH ?? "").split(delimiter)) {
     try { return await realpath(join(directory, "pi")); } catch { /* next PATH entry */ }
   }
@@ -29,27 +31,33 @@ async function main(): Promise<void> {
   const stage = (name: string): void => emit({ type: "cloud_runtime_stage", stage: name, elapsedMs: Math.round(performance.now() - started) });
   stage("resolve_sdk");
   const entry = pathToFileURL(await piEntry());
-  // The pinned npm CLI lives in dist/bundle; its ESM-only exports cannot use require.resolve.
+  // The npm CLI lives in dist/bundle; its ESM-only exports cannot use require.resolve.
   const packageUrl = new URL("../../package.json", entry);
-  const metadata = JSON.parse(await readFile(packageUrl, "utf8")) as { name?: string; version?: string };
-  if (metadata.name !== "@earendil-works/pi-coding-agent" || metadata.version !== "0.85.1") throw new Error("CLOUD_SDK_VERSION_UNSUPPORTED");
+  let metadata: { name?: string; version?: string };
+  try { metadata = JSON.parse(await readFile(packageUrl, "utf8")); }
+  catch { throw new Error("CLOUD_SDK_PACKAGE_INVALID"); }
+  if (!metadata || typeof metadata !== "object") throw new Error("CLOUD_SDK_PACKAGE_INVALID");
+  if (metadata.name !== "@earendil-works/pi-coding-agent" || !supportsPiVersion(metadata.version)) throw new Error("CLOUD_SDK_VERSION_UNSUPPORTED");
   const require = createRequire(entry);
   const sdkUrl = new URL("../index.js", entry);
   const sdk: typeof import("@earendil-works/pi-coding-agent") = await import(sdkUrl.href);
   const toolkit: typeof import("@earendil-works/pi-tui") = await import(pathToFileURL(require.resolve("@earendil-works/pi-tui")).href);
-  // Pi 0.85.1 does not re-export its active Theme or constructible app keybindings.
-  // Keep these two narrow adapters version-pinned; no renderer or Pi internals are patched.
-  if (sdk.VERSION !== "0.85.1") throw new Error("CLOUD_SDK_VERSION_UNSUPPORTED");
+  if (!supportsPiVersion(sdk.VERSION)) throw new Error("CLOUD_SDK_VERSION_UNSUPPORTED");
+  assertSdkCapabilities(sdk);
+  // These two narrow internal reads are capability-checked, not version-whitelisted.
+  // Missing/changed APIs fail explicitly; no renderer or Pi internals are patched.
   startupPhase = "load_ui_adapter";
   stage(startupPhase);
-  const themes = await import(new URL("./modes/interactive/theme/theme.js", sdkUrl).href) as {
+  const adapterUnavailable = (): never => { throw new Error("CLOUD_SDK_UI_ADAPTER_UNAVAILABLE"); };
+  const themes = await import(new URL("./modes/interactive/theme/theme.js", sdkUrl).href).catch(adapterUnavailable) as {
     theme: Theme; initTheme(name?: string, watch?: boolean): void;
     getAvailableThemesWithPaths: ExtensionUIContext["getAllThemes"];
     getThemeByName: ExtensionUIContext["getTheme"];
     setTheme(name: string, watch?: boolean): { success: boolean; error?: string };
     setThemeInstance(theme: Theme): void;
   };
-  const bindings = await import(new URL("./core/keybindings.js", sdkUrl).href) as { KeybindingsManager: { create(agentDir: string): KeybindingsManager } };
+  const bindings = await import(new URL("./core/keybindings.js", sdkUrl).href).catch(adapterUnavailable) as { KeybindingsManager: { create(agentDir: string): KeybindingsManager } };
+  assertUiAdapterCapabilities(themes, bindings, toolkit);
   const args = process.argv.slice(2);
   const option = (key: string): string | undefined => { const index = args.indexOf(key); return index < 0 ? undefined : args[index + 1]; };
   const agentDir = process.env.PI_CODING_AGENT_DIR, sessionPath = option("--session");
@@ -167,6 +175,6 @@ await main().catch((error: unknown) => {
   const message = error instanceof Error ? error.message : "";
   const code = error && typeof error === "object" && "code" in error ? String(error.code) : "";
   const diagnosis = /^CLOUD_[A-Z_]+$/.test(message) ? message : /^[A-Z_]{1,64}$/.test(code) ? code : "STARTUP_FAILED";
-  emit({ type: "response", id: "pi-cloud-initial", command: "prompt", success: false, error: `CLOUD_SDK_STARTUP_FAILED (${startupPhase}: ${diagnosis})` });
+  emit({ type: "response", id: "pi-cloud-initial", command: "prompt", success: false, error: `CLOUD_SDK_STARTUP_FAILED (${startupPhase}: ${diagnosis}; requires Pi >=${MIN_PI_VERSION} stable with the task SDK/UI APIs)` });
   process.exitCode = 1;
 });

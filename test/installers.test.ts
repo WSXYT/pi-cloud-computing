@@ -65,6 +65,7 @@ case '${name}: '"$*" in
   'git: '*status' --porcelain') [ "$PI_CLOUD_TEST_FAIL" != 'dirty' ] || printf ' M local.ts\\n' ;;
   'git: '*fetch' origin main') [ "$PI_CLOUD_TEST_FAIL" != 'fetch' ] || exit 9 ;;
   'git: '*merge' --ff-only FETCH_HEAD') [ "$PI_CLOUD_TEST_FAIL" != 'merge' ] || exit 9 ;;
+  'pi: --version') printf '%s\\n' "\${PI_CLOUD_TEST_PI_VERSION:-1.0.0}" ;;
   'pi: install '*) [ "$PI_CLOUD_TEST_FAIL" != 'pi-install' ] || exit 9 ;;
   *) printf 'Unexpected ${name} invocation\\n' >&2; exit 99 ;;
 esac
@@ -74,7 +75,7 @@ exit 0
         node: 'if "%~1"=="-p" (\r\necho 24\r\nexit /b 0\r\n)\r\nif "%~1"=="--version" (\r\necho v24.18.1\r\nexit /b 0\r\n)\r\nif "%PI_CLOUD_TEST_FAIL%"=="language" exit /b 9\r\n',
         npm: 'if "%~1"=="--version" (echo 12.0.2 & exit /b 0)\r\nif "%~1"=="ci" if "%PI_CLOUD_TEST_FAIL%"=="npm-ci" exit /b 9\r\nif "%~1"=="run" if "%PI_CLOUD_TEST_FAIL%"=="build" exit /b 9\r\n',
         git: 'if "%~3"=="status" if "%PI_CLOUD_TEST_FAIL%"=="dirty" echo  M local.ts\r\nif "%~3"=="fetch" if "%PI_CLOUD_TEST_FAIL%"=="fetch" exit /b 9\r\nif "%~3"=="merge" if "%PI_CLOUD_TEST_FAIL%"=="merge" exit /b 9\r\n',
-        pi: 'if "%PI_CLOUD_TEST_FAIL%"=="pi-install" exit /b 9\r\n',
+        pi: 'if "%~1"=="--version" (\r\nif defined PI_CLOUD_TEST_PI_VERSION (echo %PI_CLOUD_TEST_PI_VERSION%) else (echo 1.0.0)\r\nexit /b 0\r\n)\r\nif "%PI_CLOUD_TEST_FAIL%"=="pi-install" exit /b 9\r\n',
       }[name]) + 'exit /b 0\r\n');
     }
     // Fail closed if a version probe/fixture breaks: never fall through to a real package manager or service command.
@@ -104,6 +105,15 @@ exit 0
     assert.match(calls, /merge --ff-only FETCH_HEAD/);
     assert.match(calls, /client language en/);
 
+    for (const version of ["0.85.1", "2.0.0+build.1", "0.85.0", "1.0.0-rc.1", "1x0x0"]) {
+      await writeFile(log, "");
+      const attempt = () => exec(command, args, { env: { ...env, PI_CLOUD_TEST_PI_VERSION: version }, timeout: 15_000 });
+      if (["0.85.1", "2.0.0+build.1"].includes(version)) await attempt();
+      else await assert.rejects(attempt, /Pi >=0\.85\.1/);
+      const versionCalls = await readFile(log, "utf8");
+      assert.doesNotMatch(versionCalls, /npm install|BLOCKED/, "existing Pi must not be replaced or downgraded");
+      if (!["0.85.1", "2.0.0+build.1"].includes(version)) assert.doesNotMatch(versionCalls, /git .*fetch|pi install/);
+    }
     await rm(join(source, ".git"), { recursive: true });
     const sentinel = join(source, "keep.txt");
     await writeFile(sentinel, "user data");

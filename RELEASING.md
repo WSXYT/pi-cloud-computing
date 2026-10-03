@@ -4,7 +4,7 @@ Use Node 24. Never publish from an unverified working tree.
 
 1. Run `npm ci`, `npm run check`, `npm test`, `npm run pack:smoke` and `npm audit --omit=dev`.
    The package smoke test packs a real tarball, installs it in a fresh consumer, checks deployment assets and the CLI, registers it with Pi, and checks commands over real Pi RPC. It does not use the user's Pi profile or credentials.
-2. Push a candidate branch and require every CI job to pass for that exact commit:
+2. Push a candidate branch and require every CI job to pass for that exact commit. The `minimum-pi` matrix checks Pi 0.85.1 on all three systems; the client/service/Docker matrices use the current development/build version (1.0.0). Both version lanes must pass; a minimum-version policy does not promise every future SDK is compatible:
    - Windows/macOS/Linux client flows, real PTY/ConPTY input and package installation/loading;
    - each platform's installed native service: installer exits, background health, pairing, real Pi provider/skill/tool/dialog execution, credential cleanup, Git apply/native session merge, stop, restart and identity preservation;
    - all nine source/destination artifact-compatibility combinations for Unicode/binary Git files and native session tails;

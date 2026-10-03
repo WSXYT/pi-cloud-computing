@@ -30,7 +30,7 @@ import { remoteEventView, safeDisplayText } from "./client-events.js";
 import { selectSyncItems, type SyncPreflightItem } from "./client-preflight.js";
 import { selectCloudMenu, type CloudMenuItem } from "./client-menu.js";
 import { CLOUD_SHORTCUTS, loadClientState, updateClientState, type CloudClientState, type CloudTaskState } from "./client-state.js";
-import { CLOUD_VERSION, PROTOCOL_VERSION } from "./version.js";
+import { CLOUD_VERSION, MIN_PI_VERSION, PROTOCOL_VERSION, supportsPiVersion } from "./version.js";
 
 interface ActiveTask {
   state: CloudTaskState;
@@ -71,6 +71,7 @@ function nativeSessionPath(directory: string, id: string): string {
 }
 
 export default async function piCloudExtension(pi: ExtensionAPI): Promise<void> {
+  if (!supportsPiVersion(VERSION)) throw new Error(`Pi Cloud requires Pi >=${MIN_PI_VERSION} (stable release). Update Pi before loading the extension.`);
   let state = await loadClientState();
   let locale = detectLocale(state.locale);
   const shortcut = state.shortcut ?? "f6";

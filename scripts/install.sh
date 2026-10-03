@@ -155,9 +155,9 @@ fi
 GLOBAL_PREFIX="$("$NPM_BIN" prefix --global)"
 install_pi() {
   if [ -w "$GLOBAL_PREFIX" ] || [ -z "$SUDO" ]; then
-    "$NPM_BIN" install --global --prefix "$GLOBAL_PREFIX" '@earendil-works/pi-coding-agent@0.85.1' --ignore-scripts
+    "$NPM_BIN" install --global --prefix "$GLOBAL_PREFIX" '@earendil-works/pi-coding-agent@latest' --ignore-scripts
   else
-    "$SUDO" env "PATH=$PATH" "$NPM_BIN" install --global --prefix "$GLOBAL_PREFIX" '@earendil-works/pi-coding-agent@0.85.1' --ignore-scripts
+    "$SUDO" env "PATH=$PATH" "$NPM_BIN" install --global --prefix "$GLOBAL_PREFIX" '@earendil-works/pi-coding-agent@latest' --ignore-scripts
   fi
   hash -r
 }
@@ -174,6 +174,14 @@ elif [ -z "$PI_BIN" ]; then
   if [ "$LANGUAGE" = "zh-CN" ]; then printf '已安装 Pi：%s\n' "$PI_BIN"; else printf 'Installed Pi: %s\n' "$PI_BIN"; fi
 else
   if [ "$LANGUAGE" = "zh-CN" ]; then printf '检测到已有 Pi：%s，不重复安装。\n' "$PI_BIN"; else printf 'Found existing Pi at %s; keeping it.\n' "$PI_BIN"; fi
+fi
+
+# Keep newer installations; never downgrade or silently replace an existing Pi.
+PI_VERSION="$("$PI_BIN" --version)"
+if [[ ! "$PI_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]] ||
+  { [ "${BASH_REMATCH[1]}" -eq 0 ] && { [ "${BASH_REMATCH[2]}" -lt 85 ] || { [ "${BASH_REMATCH[2]}" -eq 85 ] && [ "${BASH_REMATCH[3]}" -lt 1 ]; }; }; }; then
+  printf '%s\n' 'Pi >=0.85.1 (stable) is required. Update Pi with npm install -g @earendil-works/pi-coding-agent@latest, then rerun.' >&2
+  exit 1
 fi
 
 SOURCE_DIR="${PI_CLOUD_SOURCE_DIR:-${PI_CLOUD_DATA_DIR:-$HOME/.pi-cloud}/source}"
