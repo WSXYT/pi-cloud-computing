@@ -21,7 +21,7 @@ import { loadWorkerState, saveWorkerState } from "../src/worker/state.js";
 
 const run = promisify(execFile);
 
-test("pairs, uploads a repository, runs RPC, and returns Git results", async () => {
+test("pairs, uploads a repository, runs RPC, and returns Git results", { timeout: 20_000 }, async (t) => {
   const source = await mkdtemp(join(tmpdir(), "pi-cloud-e2e-source-"));
   await run("git", ["init", "-q"], { cwd: source });
   await run("git", ["config", "user.email", "test@example.com"], {
@@ -101,17 +101,17 @@ test("pairs, uploads a repository, runs RPC, and returns Git results", async () 
       secretIds: [],
     };
     const frames: ProtocolFrame[] = [];
-    const socket = await connection.openEvents((frame) => frames.push(frame));
+    const completion = Promise.withResolvers<void>();
+    t.signal.addEventListener("abort", () => completion.reject(new Error("Worker result was not received")), { once: true });
+    const socket = await connection.openEvents((frame) => {
+      frames.push(frame);
+      if (frame.type === "task_result") completion.resolve();
+      if (frame.type === "error") completion.reject(new Error(frame.error.code));
+    });
+    t.after(() => socket.terminate());
     connection.send(socket, { type: "task_create", task });
-    for (
-      let attempt = 0;
-      attempt < 120 &&
-      !["completed", "failed", "aborted"].includes(
-        worker.tasks.get(task.taskId)?.status ?? "",
-      );
-      attempt += 1
-    )
-      await new Promise((resolve) => setTimeout(resolve, 25));
+    // Await the durable protocol result, not a 3-second polling race with Windows filesystem work.
+    await completion.promise;
     const record = worker.tasks.get(task.taskId);
     assert.equal(record?.status, "completed", record?.result?.error);
     const statusEvent = record.events.findLast(
