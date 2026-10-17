@@ -37,7 +37,8 @@ export async function selectCloudMenu(
     for (const line of status)
       container.addChild(new Text(theme.fg("muted", line), 1, 0));
     container.addChild(new Text("", 0, 0));
-    const list = new SelectList(items, Math.min(items.length, 10), {
+    // Keep action labels readable; show the focused description below instead of a fixed 32-column label.
+    const list = new SelectList(items.map(item => ({ value: item.value, label: item.label })), Math.min(items.length, 10), {
       selectedPrefix: (text) => theme.fg("accent", text),
       selectedText: (text) => theme.fg("accent", text),
       description: (text) => theme.fg("muted", text),
@@ -47,6 +48,11 @@ export async function selectCloudMenu(
     list.onSelect = (item) => done(item.value);
     list.onCancel = () => done(null);
     container.addChild(list);
+    const description = new Text("", 1, 1);
+    const describe = (value: string) => description.setText(theme.fg("muted", items.find(item => item.value === value)?.description ?? ""));
+    list.onSelectionChange = item => describe(item.value);
+    if (items[0]) describe(items[0].value);
+    container.addChild(description);
     container.addChild(new Text(theme.fg("dim", help), 1, 0));
     container.addChild(
       new DynamicBorder((text: string) => theme.fg("accent", text)),

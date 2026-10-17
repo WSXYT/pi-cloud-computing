@@ -14,7 +14,7 @@ import { promisify } from "node:util";
 import test, { type TestContext } from "node:test";
 
 import { sha256 } from "../src/environment.js";
-import { applyGitSnapshot } from "../src/result.js";
+import { applyGitSnapshot, validateResultBaseline } from "../src/result.js";
 import {
   getGitBaseline,
   parseGitSnapshot,
@@ -159,13 +159,14 @@ test("rejects a result that substitutes the persisted submission baseline", asyn
   const cwd = await repository(t);
   const submitted = await getGitBaseline(cwd);
   await writeFile(join(cwd, "file.txt"), "new local work");
-  const untrusted = result(await getGitBaseline(cwd), {
-    "file.txt": "overwrite",
-  });
-  await assert.rejects(
-    () => applyGitSnapshot(cwd, untrusted, submitted),
-    /locally saved submission baseline/,
-  );
+  for (const contents of [{ "file.txt": "overwrite" }, {}]) {
+    const untrusted = result(await getGitBaseline(cwd), contents);
+    assert.throws(() => validateResultBaseline(untrusted, submitted), /locally saved submission baseline/);
+    await assert.rejects(
+      () => applyGitSnapshot(cwd, untrusted, submitted),
+      /locally saved submission baseline/,
+    );
+  }
   assert.equal(await readFile(join(cwd, "file.txt"), "utf8"), "new local work");
 });
 

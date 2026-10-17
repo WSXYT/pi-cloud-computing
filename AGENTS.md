@@ -8,22 +8,22 @@ Node.js 24 TypeScript ESM Pi extension and native Windows/macOS/Linux Worker. So
 - Install: `npm ci`
 - Validate: `npm run check && npm test`
 - Package/install smoke: `npm run pack:smoke`
-- Published-package smoke: set `PI_CLOUD_SMOKE_PACKAGE=pi-cloud-computing@<version>`.
+- Published smoke: `PI_CLOUD_SMOKE_PACKAGE=pi-cloud-computing@<version>`.
 - Production audit: `npm audit --omit=dev`
 
 ## Safety and Recovery
-- Pin certificates and check Worker health/capabilities before uploads. Never expose credentials or raw exceptions.
+- Pin certificates; check Worker health/capabilities before uploads. Never expose credentials/raw exceptions.
 - Never recreate missing tasks automatically. Local timeouts do not establish remote outcomes.
-- Preserve abort finalization until process/credential cleanup finishes.
-- Default credential selection is not consent: require explicit per-task authorization, encrypted/revocable storage and cleanup. No-auth endpoints require confirmation.
+- Preserve abort finalization through process/credential cleanup.
+- Credential defaults are not consent: require explicit per-task authorization, encrypted/revocable storage and cleanup. Confirm no-auth endpoints.
 - Windows private writes fail closed on ACL errors; never recursively strip child inheritance.
-- Preserve source, state, sessions and artifacts. Uninstall preserves private data.
-- Validate cached results, preview before consent, and apply only after baseline checks.
+- Preserve source/state/sessions/artifacts; uninstall preserves private data.
+- Validate cached results/submission baselines before review. Default to keep; require explicit apply consent and recheck before writes.
 
 ## UX and Acceptance
-- Idle Enter stays local; running Enter steers cloud. Preserve native follow-up/dequeue, drafts, focus-aware Escape and usable stop.
-- Keep cloud display cards out of local model context; triggerTurn:false is insufficient.
-- Reuse native Pi components; keep plugin code isolated. Require Pi >=0.85.1 stable plus SDK/UI capability checks, not an exact-version whitelist. Test minimum and current Pi; fail unsupported capabilities explicitly.
-- Require real PTY/ConPTY, three-system installed-service execution, cross-platform artifacts, package smoke and Linux Docker. Skips/mocks are not acceptance.
+- Idle Enter stays local; running Enter steers cloud. Preserve follow-up/dequeue, drafts, focus-aware Escape and usable stop.
+- Keep cloud display cards outside local model context; triggerTurn:false is insufficient.
+- Reuse native Pi components; isolate plugins. Require Pi >=0.85.1 stable plus SDK/UI capabilities, never an exact-version whitelist. Fail unsupported capabilities explicitly.
+- Test minimum/current Pi, real PTY/ConPTY startup/reload, three-system installed services, cross-platform artifacts, package smoke and Linux Docker. Skips/mocks are not acceptance.
 - Service-install CI scripts are disposable-runner only. Record limits in `ACCEPTANCE.md`; require every exact-candidate CI job per `RELEASING.md`.
 <!-- pi-agents-md:end -->

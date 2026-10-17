@@ -51,12 +51,14 @@ export async function selectSyncItems(
     }
   }
 
-  return ctx.ui.custom<Set<string> | null>((tui, theme, _keybindings, done) => {
+  return ctx.ui.custom<Set<string> | null>((tui, theme, keybindings, done) => {
     let cursor = 0;
     const uploadIndex = items.length;
     const cancelIndex = items.length + 1;
 
     const refresh = () => tui.requestRender();
+    const matches = (data: string, action: Parameters<typeof keybindings.matches>[1], fallback: Parameters<typeof matchesKey>[1]) =>
+      typeof keybindings.matches === "function" ? keybindings.matches(data, action) : matchesKey(data, fallback);
     const toggle = (index: number) => {
       const item = items[index];
       if (!item || item.required) return;
@@ -67,18 +69,21 @@ export async function selectSyncItems(
     return {
       invalidate: refresh,
       handleInput(data: string) {
-        if (matchesKey(data, Key.up)) cursor = Math.max(0, cursor - 1);
-        else if (matchesKey(data, Key.down))
+        if (matches(data, "tui.select.cancel", Key.escape) || matchesKey(data, Key.ctrl("c"))) { done(null); return; }
+        if (matches(data, "tui.select.up", Key.up) || matchesKey(data, Key.shift("tab"))) cursor = Math.max(0, cursor - 1);
+        else if (matches(data, "tui.select.down", Key.down) || matchesKey(data, Key.tab))
           cursor = Math.min(cancelIndex, cursor + 1);
+        else if (matchesKey(data, Key.home)) cursor = 0;
+        else if (matchesKey(data, Key.end)) cursor = cancelIndex;
         else if (matchesKey(data, Key.space) && cursor < items.length)
           toggle(cursor);
-        else if (matchesKey(data, Key.enter)) {
+        else if (matches(data, "tui.select.confirm", Key.enter)) {
           if (cursor < items.length) toggle(cursor);
           else if (cursor === uploadIndex) {
             if (selected.size === 0) return;
             done(new Set(selected));
           } else done(null);
-        } else if (matchesKey(data, Key.escape)) done(null);
+        }
         refresh();
       },
       render(width: number) {

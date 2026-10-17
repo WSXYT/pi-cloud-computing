@@ -3,7 +3,7 @@ import { lstat, readFile, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
 import {
-  VERSION, SettingsManager, formatSize, generateUnifiedPatch, getAgentDir, getMarkdownTheme, truncateHead, withFileMutationQueue,
+  VERSION, SettingsManager, formatSize, getAgentDir, getMarkdownTheme, withFileMutationQueue,
   type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { Markdown, type TUI } from "@earendil-works/pi-tui";
@@ -15,6 +15,7 @@ import { cloudQueueComponent, parseCloudQueue } from "./client-queue.js";
 import { hasProviderCredentials } from "./client-credentials.js";
 import { CloudComponentClient, cancellableRemoteEditor } from "./client-components.js";
 import { cachedResultArtifact } from "./client-results.js";
+import { createReviewFile, reviewCloudResult, type ReviewFile } from "./client-review.js";
 import { formatCloudError, formatProtocolError } from "./client-errors.js";
 import { sha256 } from "./environment.js";
 import { scanEnvironment } from "./environment-archive.js";
@@ -22,7 +23,7 @@ import { detectLocale, translate, type MessageKey } from "./i18n.js";
 import { assertGitRepository, createGitSnapshot, createWorkspaceArchive, currentGitMatches, parseGitSnapshot, repositoryRoot, serializeWorkspaceArchive } from "./git.js";
 import { exportSessionBranch, mergeSessionTail, mergeSessionTailPreservingLocal, parseSessionArchive, serializeSessionArchive, writeMergedSession } from "./session.js";
 import { parseFrame, parseTaskInput, parseTaskUiRequest, type ProtocolFrame, type SessionCursor, type TaskInput, type TaskResult, type TaskSnapshot, type TaskSpec, type TaskStatus, type TaskUiRequest, type TaskUiResponse } from "./protocol.js";
-import { applyGitSnapshot } from "./result.js";
+import { applyGitSnapshot, validateResultBaseline } from "./result.js";
 import { safeFilePath, validateIdentifier } from "./paths.js";
 import { writePrivateFile } from "./storage.js";
 import { CloudConnection, CloudRequestError, normalizeFingerprint } from "./client-network.js";
@@ -994,25 +995,26 @@ export default async function piCloudExtension(pi: ExtensionAPI): Promise<void> 
     if (!task.git) throw new Error(tr("cloud.gitBaseMissing"));
     const raw = await resultBytes(task, "git");
     const snapshot = parseGitSnapshot(raw.toString("utf8"));
+    validateResultBaseline(snapshot, task.git);
     const root = await repositoryRoot(ctx.cwd);
     const paths = (await Promise.all(snapshot.files.map((file) => safeFilePath(root, file.path)))).sort();
     const reviewAndApply = async (): Promise<boolean> => {
       if (!(await currentGitMatches(ctx.cwd, task.git!))) throw new Error(tr("result.baseMismatch"));
-      const patches: string[] = [];
+      const files: ReviewFile[] = [];
       for (const file of snapshot.files) {
         const before = await readFile(await safeFilePath(root, file.path)).catch((error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return Buffer.alloc(0); throw error; });
         const after = file.status === "deleted" ? Buffer.alloc(0) : Buffer.from(file.contentBase64 ?? "", "base64");
-        patches.push(`${file.status} ${file.path} (${file.mode ?? "100644"})\n${before.includes(0) || after.includes(0)
-          ? `binary: ${before.length} → ${after.length} bytes; sha256 ${sha256(after)}\n`
-          : generateUnifiedPatch(file.path, before.toString("utf8"), after.toString("utf8"))}`);
+        files.push(createReviewFile(file, before, after));
       }
       validateIdentifier(task.taskId);
       const reviewPath = join(getAgentDir(), "cloud", task.taskId, "review.patch");
-      await writePrivateFile(reviewPath, patches.join("\n"));
+      await writePrivateFile(reviewPath, files.map(file => file.patch).join("\n"));
       await writePrivateFile(join(getAgentDir(), "cloud", task.taskId, "result.json"), raw);
       ctx.ui.notify(tr("cloud.reviewSaved", { path: reviewPath }), "info");
-      const preview = truncateHead(safeDisplayText(patches.join("\n")), { maxLines: 100, maxBytes: 10_000 }).content;
-      if (!ctx.hasUI || !(await ctx.ui.confirm(tr(receive ? "cloud.receiveChoice" : "cloud.applyConfirm"), `${receive ? tr("cloud.receiveConfirm") + "\n\n" : ""}${preview}\n\n${tr("cloud.reviewSaved", { path: reviewPath })}`))) return false;
+      if (!await reviewCloudResult(ctx, {
+        title: tr(receive ? "cloud.receiveChoice" : "cloud.applyConfirm"), taskId: task.taskId,
+        project: root, files, reviewPath, mergeSession: receive && !!task.sessionArtifactId && !task.mergedSessionId,
+      }, locale)) return false;
       if (!snapshot.files.length) {
         if (task.git) task.appliedGit = task.git;
         await persistTask(task);

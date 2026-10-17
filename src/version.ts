@@ -1,5 +1,5 @@
 export const PROTOCOL_VERSION = 1 as const;
-export const CLOUD_VERSION = "0.2.1";
+export const CLOUD_VERSION = "0.2.2";
 export const MIN_PI_VERSION = "0.85.1";
 
 /** Stable SemVer releases only; no upper-version whitelist. Build metadata is ignored. */

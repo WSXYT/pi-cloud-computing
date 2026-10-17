@@ -9,7 +9,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { spawn } from "@lydell/node-pty";
-import { saveClientState } from "../src/client-state.js";
+import { loadClientState, saveClientState } from "../src/client-state.js";
 import { CloudConnection } from "../src/client-network.js";
 import { createWorkspaceArchive, serializeWorkspaceArchive } from "../src/git.js";
 import { scanEnvironment } from "../src/environment-archive.js";
@@ -61,14 +61,14 @@ for (const mode of ["regular", "fullscreen"] as const) for (const outcome of ["a
   const artifacts = await ArtifactStore.open(workerDir);
   for (const payload of payloads) await artifacts.put(payload.id, payload.data);
   const task: TaskSpec = { taskId, projectId: project, prompt: "/plugin-fixture", runner: "host", environment: environment.archive.manifest, git: workspace.snapshot.baseline, session: { sessionId, baseLeafId: null, lastEntryId: null, entriesSha256: sha256("") }, artifacts: payloads.map(p => ({ id: p.id, kind: p.kind, size: p.data.length, sha256: sha256(p.data), contentType: "application/json" })), secretIds: [] };
-  await saveClientState({ locale: "en", activeWorkerId: paired.workerId, connections: [{ ...paired, baseUrl: worker.url, fingerprint: state.certificateFingerprint!, pairedAt: new Date().toISOString() }], tasks: [{ ...task.session, taskId, workerId: paired.workerId, baseUrl: worker.url, fingerprint: state.certificateFingerprint!, projectId: project, cursor: 0, status: "queued", prompt: task.prompt, updatedAt: new Date().toISOString(), accepted: true }] }, join(agentDir, "pi-cloud.json"));
+  await saveClientState({ locale: "en", activeWorkerId: paired.workerId, connections: [{ ...paired, baseUrl: worker.url, fingerprint: state.certificateFingerprint!, pairedAt: new Date().toISOString() }], tasks: [{ ...task.session, git: task.git, taskId, workerId: paired.workerId, baseUrl: worker.url, fingerprint: state.certificateFingerprint!, projectId: project, cursor: 0, status: "queued", prompt: task.prompt, updatedAt: new Date().toISOString(), accepted: true }] }, join(agentDir, "pi-cloud.json"));
   worker.tasks.create(task);
   const env = Object.fromEntries(Object.entries(process.env).filter(([key, value]) => value !== undefined && /^(path|pathext|systemroot|windir|comspec|temp|tmp|home|userprofile|appdata|localappdata|lang|lc_all)$/i.test(key))) as Record<string, string>;
   const cli = fileURLToPath(new URL("./cli.js", import.meta.resolve("@earendil-works/pi-coding-agent")));
   const terminal = spawn(process.execPath, [cli, "--no-extensions", "--no-skills", "--no-prompt-templates", "--no-themes", "-e", fileURLToPath(new URL("../../src/client.ts", import.meta.url)), "--session", sessionFile, "--tui-mode", mode], { cwd: project, cols: 100, rows: 30, env: { ...env, TERM: "xterm-256color", PI_SKIP_VERSION_CHECK: "1", PI_CODING_AGENT_DIR: agentDir, PI_CLOUD_CLIENT_STATE: join(agentDir, "pi-cloud.json") } });
   let output = ""; terminal.onData(data => { output += data; });
   const exit = new Promise<void>(resolve => terminal.onExit(() => resolve()));
-  const until = async (predicate: () => boolean) => { for (let i = 0; i < 600; i++) { if (predicate()) return; await delay(50); } assert.fail(JSON.stringify({ output: output.slice(-8000), result: worker.tasks.get(taskId)?.result })); };
+  const until = async (predicate: () => boolean | Promise<boolean>) => { for (let i = 0; i < 600; i++) { if (await predicate()) return; await delay(50); } assert.fail(JSON.stringify({ output: output.slice(-8000), result: worker.tasks.get(taskId)?.result })); };
   try {
     await until(() => output.includes("PLUGIN_CUSTOM_INPUT"));
     terminal.resize(55, 22);
@@ -99,6 +99,25 @@ for (const mode of ["regular", "fullscreen"] as const) for (const outcome of ["a
     assert.equal(worker.tasks.get(taskId)!.inputs.length, outcome === "approve" ? 1 : 0, "only the explicit post-modal follow-up belongs in the input queue");
     if (outcome === "approve") assert.equal(worker.tasks.get(taskId)!.inputs[0]!.message, "QUEUED_PLUGIN_FOLLOWUP");
     await until(() => output.includes("input area is released"));
+    if (outcome === "approve") {
+      await until(async () => !!(await loadClientState(join(agentDir, "pi-cloud.json"))).tasks?.find(item => item.taskId === taskId)?.artifactId);
+      terminal.write("\x15"); await delay(150); // Completion can restore the dequeued draft after the earlier clear.
+      output = "";
+      terminal.write("/cloud-apply"); await delay(100); terminal.write("\r");
+      await until(() => output.includes("Changed files"));
+      await assert.rejects(readFile(join(project, "plugin-result.txt")), { code: "ENOENT" });
+      terminal.write("\x1b"); await delay(200); // Review cancellation must leave the worktree alone.
+      await assert.rejects(readFile(join(project, "plugin-result.txt")), { code: "ENOENT" });
+      output = "";
+      terminal.resize(110, 32);
+      terminal.write("/cloud-apply"); await delay(100); terminal.write("\r");
+      await until(() => output.includes("Diff preview") && output.includes("Confirm and apply files"));
+      terminal.write("\t"); await delay(100); terminal.write("\t"); await delay(100);
+      terminal.write("\x1b[B"); await delay(100); terminal.write("\r");
+      await until(async () => !!(await loadClientState(join(agentDir, "pi-cloud.json"))).tasks?.find(item => item.taskId === taskId)?.appliedGit);
+      assert.equal(await readFile(join(project, "plugin-result.txt"), "utf8"), "approved");
+      assert.equal(await readFile(join(project, "file.txt"), "utf8"), "before\n");
+    }
     terminal.write("LOCAL_AFTER_PLUGIN");
     await until(() => output.includes("LOCAL_AFTER_PLUGIN"));
   } finally {

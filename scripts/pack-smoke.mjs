@@ -6,6 +6,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { setTimeout as delay } from "node:timers/promises";
+import { spawn as spawnTerminal } from "@lydell/node-pty";
 
 const exec = promisify(execFile);
 const root = await mkdtemp(join(tmpdir(), "pi-cloud-package-"));
@@ -15,6 +17,8 @@ const npm = process.env.npm_execpath;
 assert.ok(npm, "Run through npm run pack:smoke");
 const pi = fileURLToPath(new URL("./cli.js", import.meta.resolve("@earendil-works/pi-coding-agent")));
 let child;
+let terminal;
+let terminalClosed;
 try {
   await mkdir(cwd);
   await mkdir(agentDir);
@@ -64,8 +68,34 @@ try {
   child.stdin.end();
   const timer = setTimeout(() => child.kill(), 2_000);
   try { await closed; } finally { clearTimeout(timer); }
-  console.log(`Package smoke passed: ${filename}; npm installation, deployment assets, CLI, Pi install and extension RPC loading verified.`);
+  // RPC loading never initializes the editor. Exercise installed-package startup and reload in a real terminal too.
+  terminal = spawnTerminal(process.execPath, [pi, "--no-skills", "--no-prompt-templates", "--no-themes"], {
+    cwd, cols: 100, rows: 32, name: "xterm-256color", env: { ...env, TERM: "xterm-256color" },
+  });
+  let output = "", exited = false;
+  terminal.onData(data => { output += data; });
+  terminalClosed = new Promise(resolve => terminal.onExit(() => { exited = true; resolve(); }));
+  const until = async (predicate, label) => {
+    const deadline = Date.now() + 30_000;
+    while (!predicate() && !exited && Date.now() < deadline) await delay(50);
+    assert.ok(predicate(), `Package terminal ${label} failed: ${output.slice(-12_000)}`);
+    assert.doesNotMatch(output, /Failed to load extension|Error in extension|Extension error|TypeError:/i);
+  };
+  // A fresh unauthenticated profile must still provide management commands without a model call.
+  await until(() => output.includes(cwd) || output.includes("No models available"), "startup");
+  await delay(200);
+  terminal.write("/cloud"); await delay(150); terminal.write("\r");
+  await until(() => output.includes("Worker installed: paste"), "menu");
+  terminal.write("\x1b"); await delay(150);
+  output = "";
+  terminal.write("/reload"); await delay(150); terminal.write("\r");
+  await until(() => output.includes("Reloaded keybindings"), "reload");
+  output = "";
+  terminal.write("/cloud"); await delay(150); terminal.write("\r");
+  await until(() => output.includes("Worker installed: paste"), "reloaded menu");
+  console.log(`Package smoke passed: ${filename}; npm installation, deployment assets, CLI, Pi install, RPC loading and real terminal startup/reload verified.`);
 } finally {
+  if (terminal) { terminal.kill(); await terminalClosed; }
   if (child && child.exitCode === null && child.signalCode === null) {
     const closed = once(child, "close"); child.kill(); await closed;
   }

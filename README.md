@@ -11,7 +11,8 @@ Run your Pi session and Git workspace on a self-hosted Worker, then safely recei
 
 - **本地电脑**安装 Pi 插件，负责输入、授权和接收结果。
 - **服务器**安装 Worker，负责后台执行。Windows、macOS、Linux 都可原生运行，**不依赖 Docker**。
-- 需要 Node.js **24.x**、Git、Pi **≥0.85.1 稳定版**（包括 **1.0.0**）。项目必须是至少有一个 commit 的 Git 仓库。
+- 需要 Node.js **24.x**、Git、Pi **≥0.85.1 稳定版**（包括 **1.3.0**）。项目必须是至少有一个 commit 的 Git 仓库。
+
 - 服务器需有本地电脑可访问的 IP，并允许 TCP **9443**；不一定要公网 IP，局域网/VPN 也可以。
 - 原生 `host` 模式使用服务账号权限执行代码，不是安全沙箱。只连接自己信任的服务器；只同步信任的插件和依赖。
 
@@ -47,7 +48,8 @@ try {
 
 > `main` 链接安装主分支。开发/验收分支不等于已发布版本；生产更新前核对 [ACCEPTANCE.md](ACCEPTANCE.md) 和对应 commit 的 CI。
 
-安装器缺少 Pi 时安装 npm `latest` 稳定版；已有符合最低版本的 Pi 会保留，不降级。旧版或预发布版会提示手动更新，不擅自替换。开发依赖/默认 Docker 构建使用 **1.0.0** 以便复现，这不是运行时锁版；Docker 可用 `--build-arg PI_VERSION=<稳定版本>` 选择其他满足下限的版本。CI 同时覆盖最低版本与开发锁定版本。Pi 宿主依赖按官方插件规范保留 `peerDependencies: "*"`，版本下限由运行时检查执行。
+安装器缺少 Pi 时安装 npm `latest` 稳定版；已有符合最低版本的 Pi 会保留，不降级。旧版或预发布版会提示手动更新，不擅自替换。开发依赖/默认 Docker 构建使用 **1.3.0** 以便复现，这不是运行时锁版；Docker 可用 `--build-arg PI_VERSION=<稳定版本>` 选择其他满足下限的版本。CI 同时覆盖最低版本与开发锁定版本。Pi 宿主依赖按官方插件规范保留 `peerDependencies: "*"`，版本下限由运行时检查执行。
+
 
 ### 原生交互的服务端兼容要求
 
@@ -76,7 +78,7 @@ try {
 
 ### 一次清晰的上传授权
 
-同步清单支持方向键移动、空格切换、Enter 进入确认、Esc 取消：
+同步清单遵循 Pi 的选择/确认按键配置，也支持 Tab/Shift+Tab 移动、空格切换、Home/End 跳转；Esc 或 Ctrl+C 可取消：
 
 - **Git 工作区**：必需；Git 历史、已跟踪文件改动和选中的非忽略新文件。
 - **Pi 运行环境**：插件、本地包、skills、prompts、themes 与已脱敏 Provider 配置。
@@ -113,9 +115,10 @@ try {
 
 `/cloud → 查看并接收云端结果`（或 `/cloud-receive`）先展示实际文件差异，再统一确认文件与对话，只确认一次：
 
-1. 校验本地 Git baseline；提交后文件改变则拒绝覆盖。
-2. 应用文件，保留可审阅的补丁和原始结果。
-3. 校验会话 entry ID、父子关系与提交时的对话副本，创建并切换到新的原生 Pi 会话。
+1. 审阅前校验结果结构、哈希、远端提交基线和本地 Git baseline；提交后文件改变则拒绝覆盖。
+2. 审阅页显示文件清单、增删统计、逐文件彩色差异、二进制大小/哈希及完整补丁路径。宽屏左右分栏，窄屏上下排列；Tab/Shift+Tab 切换文件、差异和操作区，方向键选择/滚动，PgUp/PgDn、Home/End 浏览差异。
+3. 默认选中“暂不应用，保留结果”；Esc/Ctrl+C 不改动项目。只有明确选择应用并确认，才会再次复核本地基线后写入文件。每个文件的屏内预览限 1,000 行/40,000 字节，完整补丁和原始结果不截断。
+4. 接收对话时，校验会话 entry ID、父子关系与提交时副本，创建并切换到新的原生 Pi 会话。
 
 提交后继续在本地输入的对话会保留。原会话、提交时副本、结果文件及恢复材料不会被覆盖。文件成功而对话未完成时，重新接收仅重做未完成部分。也可以稍后处理结果，继续本地。
 
@@ -154,7 +157,8 @@ Docker 是 Linux 上的可选隔离模式，不是三平台原生 Worker 的前�
 
 ### Install the server, then connect your local computer
 
-There are two distinct roles: **local Pi extension** and **native Worker server**. Both support Windows, macOS and Linux. Native execution does **not require Docker**. Requirements: Node **24.x**, Git, Pi **≥0.85.1 stable** (including **1.0.0**), a repository with an initial commit, and a server IP reachable on TCP **9443** over your LAN, VPN or the Internet.
+There are two distinct roles: **local Pi extension** and **native Worker server**. Both support Windows, macOS and Linux. Native execution does **not require Docker**. Requirements: Node **24.x**, Git, Pi **≥0.85.1 stable** (including **1.3.0**), a repository with an initial commit, and a server IP reachable on TCP **9443** over your LAN, VPN or the Internet.
+
 
 On Linux/macOS, run the server command above with `--lang en` and your actual IP. On Windows, run the PowerShell example with `-Language en` from an administrator terminal. Only run installers from a source you trust.
 
@@ -162,12 +166,13 @@ After dependency checks, service registration and a pinned local health check, t
 
 Unverified/dirty source checkouts do not emit installer links; use a verified installation and the complete `/cloud-pair ...` line instead. A client-first installation can paste that line through `/cloud`. Existing Pi windows need `/reload`. Main-branch installer links are not a claim that a development candidate has been released.
 
-If Pi is missing, installers use npm `latest` stable; existing installations meeting the minimum are kept, never downgraded. Older/prerelease versions require an explicit manual update. Development dependencies and default Docker builds use **1.0.0** for reproducibility, not as a runtime restriction; use `--build-arg PI_VERSION=<stable-version>` for another version meeting the minimum. CI covers both the minimum and the development version. Host-provided peers remain `"*"` as required by Pi package conventions; runtime checks enforce the minimum.
+If Pi is missing, installers use npm `latest` stable; existing installations meeting the minimum are kept, never downgraded. Older/prerelease versions require an explicit manual update. Development dependencies and default Docker builds use **1.3.0** for reproducibility, not as a runtime restriction; use `--build-arg PI_VERSION=<stable-version>` for another version meeting the minimum. CI covers both the minimum and the development version. Host-provided peers remain `"*"` as required by Pi package conventions; runtime checks enforce the minimum.
+
 
 ### Input and authorization
 
 - **Enter** stays local while idle. **F6** submits the editor draft to cloud preflight.
-- Review the Git workspace, runtime resources, conversation and optional credentials. Detected current-provider/model credentials start **selected**, but only final consent authorizes their upload or reuse. The bundle may include other providers’ auth.json/config secrets and referenced environment variables; inspect the scope.
+- Preflight honors Pi selection/confirm bindings, Tab/Shift+Tab and Home/End; Esc or Ctrl+C cancels. Review the Git workspace, runtime resources, conversation and optional credentials. Detected current-provider/model credentials start **selected**, but only final consent authorizes their upload or reuse. The bundle may include other providers’ auth.json/config secrets and referenced environment variables; inspect the scope.
 - During preparation/upload, **the native interrupt key (default Esc) or F6 cancels the request and restores the draft**.
 - During execution, **the configured native interrupt key (default Esc) requests a real remote stop**. While it remains unconfirmed, a second Esc only ends local waiting. Replies, thinking and tools use Pi’s native components with streaming, Ctrl+T and Ctrl+O, without starting a local model turn.
 - During execution the editor stays editable. **Enter steers the cloud task**, while the configured native follow-up shortcut (such as Ctrl+Q) queues input for after the current turn. Offline additions are shown separately as locally saved, not yet acknowledged; the disconnected state remains until reconnection. The configured dequeue shortcut or `/cloud-dequeue` retrieves queued text into the editor after acknowledgement; it never automatically resubmits it. `/cloud-inputs` retains recovery copies.
@@ -193,7 +198,7 @@ Transfer failures identify the artifact, phase (connection/upload/response/downl
 
 `/cloud-retry` creates a **new task on the original Worker**, preserves the failed record and requests fresh consent; external effects may repeat. `/cloud-cancel` cancels preparation/upload rather than merely hiding its UI.
 
-Completed results are automatically validated and cached locally, without applying files or switching sessions; validated cached results remain usable offline. A cache failure offers refetch, not task re-execution. Choose **View and receive remote results** in `/cloud`, or run `/cloud-receive`. The actual file diff is shown before one confirmation applies baseline-checked files and merges the native session. Local conversation added since submission is retained. Originals, review patches, submitted-session copies and result artifacts remain available. Repeating after partial success handles only unfinished phases. Local file changes prevent overwrite. `/cloud-apply` and `/cloud-merge` remain compatibility commands; receipt can be deferred while you work locally.
+Completed results are automatically validated and cached locally, without applying files or switching sessions; validated cached results remain usable offline. A cache failure offers refetch, not task re-execution. Choose **View and receive remote results** in `/cloud`, or run `/cloud-receive`. The review checks result hashes and both submission/local baselines, then shows the file list, addition/deletion totals, colored per-file diffs, binary sizes/hashes and saved full-patch path. Wide terminals use split panes; narrow terminals stack them. Tab/Shift+Tab switches files/diff/actions; arrows select or scroll; PgUp/PgDn and Home/End navigate the diff. **Keep without applying is the default**; Esc/Ctrl+C makes no project changes. Explicitly select apply before confirming; file application independently rechecks the baseline. Each on-screen file preview is bounded to 1,000 lines/40,000 bytes; full patches and raw results are preserved. One explicit receipt confirmation covers files and the native conversation. Local conversation added since submission is retained. Originals, review patches, submitted-session copies and result artifacts remain available. Repeating after partial success handles only unfinished phases. Local file changes prevent overwrite. `/cloud-apply` and `/cloud-merge` remain compatibility commands; receipt can be deferred while you work locally.
 
 ### Operations and security
 

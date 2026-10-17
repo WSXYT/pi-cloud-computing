@@ -37,11 +37,7 @@ async function replaceFile(
   }
 }
 
-export async function applyGitSnapshot(
-  cwd: string,
-  snapshot: GitSnapshot,
-  expectedBaseline: GitBaseline = snapshot.baseline,
-): Promise<string[]> {
+export function validateResultBaseline(snapshot: GitSnapshot, expectedBaseline: GitBaseline): void {
   validateGitSnapshot(snapshot);
   for (const key of [
     "repositoryHash",
@@ -54,6 +50,14 @@ export async function applyGitSnapshot(
         "remote result does not match the locally saved submission baseline",
       );
   }
+}
+
+export async function applyGitSnapshot(
+  cwd: string,
+  snapshot: GitSnapshot,
+  expectedBaseline: GitBaseline = snapshot.baseline,
+): Promise<string[]> {
+  validateResultBaseline(snapshot, expectedBaseline);
   const root = await repositoryRoot(cwd);
   if (!(await currentGitMatches(root, expectedBaseline)))
     throw new Error("local base changed; remote result was not applied");

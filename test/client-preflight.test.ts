@@ -96,3 +96,21 @@ test("preflight supports toggling multiple items and an explicit upload action",
   assert.match(rendered, /Local project: \/work\/project/);
   assert.match(rendered, /nothing uploaded yet/);
 });
+
+test("preflight honors native selection bindings, Tab navigation and Ctrl+C cancellation", async () => {
+  const labels = { title: "Choose", required: "Required", upload: "Next", cancel: "Cancel", help: "Help", empty: "Empty" };
+  for (const input of [["j", "y"], ["\t", "\r"], ["\x03"]]) {
+    const ctx = { mode: "tui", hasUI: true, ui: {
+      custom<T>(factory: (tui: { requestRender(): void }, theme: TestTheme, keys: unknown, done: (value: T) => void) => TestComponent): Promise<T> {
+        return new Promise(resolve => {
+          const component = factory({ requestRender() {} }, { fg: (_color, text) => text, bold: text => text }, input[0] === "j" ? {
+            matches(data: string, action: string) { return (data === "j" && action === "tui.select.down") || (data === "y" && action === "tui.select.confirm"); },
+          } : {}, resolve);
+          for (const key of input) component.handleInput?.(key);
+        });
+      },
+    } } as unknown as ExtensionCommandContext;
+    const selected = await selectSyncItems(ctx, [{ id: "git", label: "Git", description: "Required", selected: true, required: true }], labels);
+    assert.deepEqual(selected === null ? null : [...selected], input[0] === "\x03" ? null : ["git"]);
+  }
+});

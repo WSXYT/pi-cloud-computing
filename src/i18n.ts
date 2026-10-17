@@ -138,6 +138,8 @@ export const MESSAGE_KEYS = [
   "cloud.stepSync", "cloud.stepConfirm", "cloud.preflightNext", "cloud.preflightNextHelp",
   "cloud.reviewNext", "cloud.filesReceived", "cloud.conversationReceived", "cloud.watchChoice",
   "cloud.gitRequired", "cloud.abortConfirm",
+  "review.receive", "review.apply", "review.scope", "review.summary", "review.checks", "review.saved",
+  "review.receiveScope", "review.later", "review.files", "review.diff", "review.binary", "review.actions", "review.help", "review.limited",
 ] as const;
 
 export type MessageKey = (typeof MESSAGE_KEYS)[number];
@@ -146,6 +148,20 @@ export type MessageParams = Record<string, string | number>;
 type Catalog = Record<MessageKey, string>;
 
 const zhCN: Catalog = {
+  "review.receive": "应用文件，并接回云端对话",
+  "review.apply": "确认应用文件",
+  "review.scope": "仅应用清单文件，保留原始结果与恢复备份；对话不变。",
+  "review.receiveScope": "应用清单文件并接回对话；保留原始结果及原会话。",
+  "review.summary": "{files} 个文件  ·  +{added} 新增行  −{removed} 删除行",
+  "review.checks": "✓ 结果结构与哈希已校验  ·  ✓ 本地提交基线一致",
+  "review.saved": "完整补丁：{path}",
+  "review.later": "暂不应用，保留结果",
+  "review.files": "变更文件",
+  "review.diff": "差异预览",
+  "review.binary": "二进制文件",
+  "review.actions": "下一步",
+  "review.help": "{cancel} 暂不应用 · Tab 切换区域 · {enter} 进入/确认 · {up}/{down}/PgUp/PgDn 浏览",
+  "review.limited": "… 此文件预览已截断；请查看保存的完整补丁。",
   "cloud.legacyWorker": "旧版（未报告版本）",
   "cloud.artifactTooLarge": "准备上传时发现 {kind} 为 {size}，超过单个制品限制 {limit}（ARTIFACT_TOO_LARGE）。尚未上传或执行；请缩小工作区或同步范围后重新确认。",
   "cloud.outcomeUnknown": "云端状态尚未确认",
@@ -377,7 +393,7 @@ const zhCN: Catalog = {
   "cloud.stepConfirm": "3/3 · 确认上传并启动",
   "cloud.preflightNext": "下一步：检查并确认",
   "cloud.preflightNextHelp": "↑↓ 移动 · 空格切换 · 下一步只预览，不上传 · Esc 返回",
-  "cloud.reviewNext": "下一步：审阅文件，再接回对话。两项独立确认，原会话保留。",
+  "cloud.reviewNext": "下一步：审阅变更，明确确认后接收文件与对话；原会话保留。",
   "cloud.filesReceived": "✓ 文件结果已处理",
   "cloud.conversationReceived": "✓ 云端对话已接回",
   "cloud.watchChoice": "返回对话，继续查看云端输出",
@@ -387,6 +403,20 @@ const zhCN: Catalog = {
 };
 
 const en: Catalog = {
+  "review.receive": "Apply files and receive conversation",
+  "review.apply": "Confirm and apply files",
+  "review.scope": "Only listed files; conversation unchanged. Raw results and backups are kept.",
+  "review.receiveScope": "Apply listed files and merge conversation. Raw results and original sessions are kept.",
+  "review.summary": "{files} files  ·  +{added} added lines  −{removed} removed lines",
+  "review.checks": "✓ Result structure and hashes checked  ·  ✓ Local submission baseline matches",
+  "review.saved": "Full patch: {path}",
+  "review.later": "Not now; keep the result",
+  "review.files": "Changed files",
+  "review.diff": "Diff preview",
+  "review.binary": "Binary file",
+  "review.actions": "Next step",
+  "review.help": "{cancel} keep result · Tab switch pane · {enter} enter/confirm · {up}/{down}/PgUp/PgDn browse",
+  "review.limited": "… File preview truncated; inspect the saved full patch.",
   "cloud.legacyWorker": "legacy (version not reported)",
   "cloud.artifactTooLarge": "Pre-upload check: {kind} is {size}, exceeding the {limit} per-artifact limit (ARTIFACT_TOO_LARGE). Nothing has been uploaded or executed; reduce workspace/sync scope and confirm again.",
   "cloud.outcomeUnknown": "Remote outcome unconfirmed",
@@ -629,7 +659,7 @@ const en: Catalog = {
   "cloud.stepConfirm": "3/3 · Confirm upload and start",
   "cloud.preflightNext": "Next: review and confirm",
   "cloud.preflightNextHelp": "↑↓ move · Space toggle · Next only previews; no upload yet · Esc back",
-  "cloud.reviewNext": "Next: review files, then receive the conversation. Each is confirmed separately; the original session is kept.",
+  "cloud.reviewNext": "Next: review changes, then explicitly confirm receiving files and conversation; the original session is kept.",
   "cloud.filesReceived": "✓ File result handled",
   "cloud.conversationReceived": "✓ Remote conversation received",
   "cloud.watchChoice": "Return to the conversation and watch remote output",
