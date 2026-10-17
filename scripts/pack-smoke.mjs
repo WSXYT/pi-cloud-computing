@@ -79,11 +79,10 @@ try {
     const deadline = Date.now() + 30_000;
     while (!predicate() && !exited && Date.now() < deadline) await delay(50);
     assert.ok(predicate(), `Package terminal ${label} failed: ${output.slice(-12_000)}`);
-    assert.doesNotMatch(output, /Failed to load extension|Error in extension|Extension error|TypeError:/i);
+    assert.doesNotMatch(output, /Failed to load extension|Error in extension|Extension error|TypeError:|Startup is still in progress/i);
   };
-  // A fresh unauthenticated profile must still provide management commands without a model call.
-  await until(() => output.includes(cwd) || output.includes("No models available"), "startup");
-  await delay(200);
+  // The footer appears before first-run fd/rg setup finishes; this unauthenticated notice follows ready input handlers.
+  await until(() => output.includes("No models available"), "startup");
   terminal.write("/cloud"); await delay(150); terminal.write("\r");
   await until(() => output.includes("Worker installed: paste"), "menu");
   terminal.write("\x1b"); await delay(150);
